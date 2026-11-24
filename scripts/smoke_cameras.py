@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 现场双相机冒烟测试：会打开两台实体相机，验证帧数、序列号和尺寸；不连接机械臂。
 """Open both cameras through ROS launch, decode frames, then stop OUR launch.
 
 Run after sourcing install/setup.bash. Does not connect to or move the robot.
@@ -19,11 +20,13 @@ from cv_bridge import CvBridge
 from vservo_ros2.ros_utils import LATCHED
 
 
+# 启动自有 ROS 子进程并订阅反馈，达到条件后检查结果；finally 只停止本脚本创建的进程组。
 def main():
     rclpy.init()
     node = Node('dual_camera_smoke')
     counts, metadata, infos, shapes = {}, {}, {}, {}
     bridge = CvBridge()
+    # 将 ROS 图像解码为 BGR，按角色统计收到的有效帧并检查 optical_frame。
     def on_image(role, msg):
         image = bridge.imgmsg_to_cv2(msg, 'bgr8')
         assert msg.header.frame_id == f'{role}_optical_frame'

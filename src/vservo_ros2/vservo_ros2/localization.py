@@ -1,9 +1,14 @@
+# 双相机选择器，只维护观测和状态，不依赖 ROS。输入均为 base_T_target。
+# 默认 first_seen：先连续看到目标的一路主导；主相机失效后才交接。
+# COARSE 表示 ETH 主导，FINE 表示 EIH 主导；这两个名称不保证实际测量精度。
 """ETH acquisition, EIH refinement, hysteresis, loss and consistency checks."""
 import numpy as np
 from .geometry import error, validate
 
 
+# 每路样本保存（图像时间戳、基座系目标矩阵、相机到目标距离），并记录连续可见起点。
 class Selector:
+    # 校验观测时效、配对时间差和历史 handoff 策略的滞回/确认参数。
     def __init__(self, max_age=0.3, pair_skew=0.10, agreement_m=0.04,
                  agreement_deg=12.0, enter_m=0.45, leave_m=0.55, confirmations=3,
                  handoff_timeout=1.0, require_pair_agreement=False, target_loss_timeout=2.0,
@@ -33,6 +38,7 @@ class Selector:
         self.last_target_stamp = None
         self.fine_lost_at = None
 
+    # 接收比已存样本更新的观测；长时间中断后重新记录首次可见时刻。
     def update(self, role, stamp, T, distance):
         if role not in ('eih', 'eth') or not np.isfinite([stamp, distance]).all() or distance <= 0:
             raise ValueError('Invalid role / observation')
@@ -45,6 +51,7 @@ class Selector:
                 self.active_source = None
         self.samples[role] = (stamp, pose, distance)
 
+    # 过滤过期或未来观测，计算双路一致性诊断，然后按所选策略返回（状态、样本）。
     def choose(self, now):
         if self.last_target_stamp is not None and not 0 <= now-self.last_target_stamp <= self.target_loss_timeout:
             self.reset_handoff()
@@ -61,6 +68,7 @@ class Selector:
                     handoff_confirmations=self.confirmations, pair_enforced=self.require_pair_agreement,
                     target_loss_timeout_s=self.target_loss_timeout, reacquire_delay_s=self.reacquire_delay,
                     selection_policy=self.selection_policy)
+        # 仅对时间足够接近的两路观测比较基座系位姿，避免把运动造成的差异误作标定偏差。
         if skew is not None and skew <= self.pair_skew:
             t, a = error(eih[1], eth[1])
             diag.update(translation_mm=t*1000, rotation_deg=float(np.degrees(a)), pair_status='agreed')
@@ -69,6 +77,7 @@ class Selector:
                 if self.require_pair_agreement and self.selection_policy == 'handoff':
                     self.reset_handoff()
                     return self.result(diag, 'INCONSISTENT', 'pair_mismatch')
+        # 默认策略保持当前有效主相机；双路偏差只显示，不在这里否决目标或反复抢占。
         if self.selection_policy == 'first_seen':
             diag['pair_enforced'] = False
             if self.active_source not in live:
@@ -80,6 +89,7 @@ class Selector:
             self.fine = self.active_source == 'eih'
             return self.result(diag, 'FINE' if self.fine else 'COARSE',
                                f'{self.active_source}_leading', live[self.active_source])
+        # 历史策略：ETH 有效时始终优先，只有 ETH 不可用才使用 EIH。
         if self.selection_policy == 'eth_primary':
             diag['pair_enforced'] = False
             if eth:
@@ -90,6 +100,7 @@ class Selector:
                 return self.result(diag, 'FINE', 'eih_fallback', eih)
             self.fine = False
             return self.result(diag, 'HOLD', 'both_lost')
+        # 以下为历史 handoff 策略：近距离进入 EIH，较远阈值才退出，形成距离滞回。
         if self.fine:
             if eih and eih[2] <= self.leave_m:
                 return self.result(diag, 'FINE', 'eih_tracking', eih)
@@ -101,6 +112,7 @@ class Selector:
         recent_coarse = coarse_age is not None and 0 <= coarse_age <= self.handoff_timeout
         recovering_eih = self.fine_lost_at is not None and self.last_target_stamp is not None
         if (recent_coarse or recovering_eih) and eih and eih[2] <= self.enter_m:
+            # 确认计数按不同图像帧增加，不能靠同一帧被多个定时周期重复读取来凑数。
             if eih[0] != self.last_confirmed_stamp:
                 self.count += 1
                 self.last_confirmed_stamp = eih[0]
@@ -122,6 +134,7 @@ class Selector:
         self.last_coarse_stamp = None
         return self.result(diag, 'HOLD', 'waiting_eth')
 
+    # 处理带时间戳的丢失事件：只移除不晚于该事件的样本，不能删除更新观测。
     def invalidate(self, role, stamp):
         sample = self.samples.get(role)
         if sample is not None and sample[0] <= stamp:
@@ -130,12 +143,14 @@ class Selector:
             if self.active_source == role:
                 self.active_source = None
 
+    # 清空主导权与滞回历史；样本仍由 choose 的时效检查决定是否可用。
     def reset_handoff(self):
         self.fine, self.count = False, 0
         self.last_confirmed_stamp = self.last_coarse_stamp = None
         self.last_target_stamp = self.fine_lost_at = None
         self.active_source = None
 
+    # 统一记录原因、来源和交接计数；仅在实际选中样本时更新最近目标时间。
     def result(self, diagnostics, state, reason, sample=None):
         if sample is not None:
             self.last_target_stamp = sample[0]

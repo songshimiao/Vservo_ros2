@@ -1,3 +1,5 @@
+# 伺服目标节点：选中的 base_T_target → 期望 base_T_flange。
+# 以 50 Hz 发布完整 desired 目标及兼容微步预览；本节点不调用机器人 SDK。
 import json
 import numpy as np
 from rclpy.node import Node
@@ -10,7 +12,9 @@ from .control import step, target_flange, in_workspace
 from .ros_utils import param, spin, fresh, LATCHED
 
 
+# 连接定位状态、两种目标流、手眼矩阵、当前法兰 TF 与速度倍率。
 class ServoNode(Node):
+    # 要求已验证的 EIH 手眼；tracking_frame 决定距离约束作用于相机中心还是法兰中心。
     def __init__(self):
         super().__init__('servo')
         data = read_json(param(self, 'eih_handeye', ''))
@@ -43,6 +47,7 @@ class ServoNode(Node):
         self.create_subscription(String, '/robot/speed_status', self.on_speed, LATCHED)
         self.create_timer(0.02, self.tick)
 
+    # 从桥接确认的速度状态更新预览倍率，忽略格式错误或越界数据。
     def on_speed(self, msg):
         try:
             data = json.loads(msg.data)
@@ -52,11 +57,14 @@ class ServoNode(Node):
         except (ValueError, KeyError, TypeError):
             pass
 
+    # 切换状态时清除旧模式目标，避免相机交接后继续使用上一模式缓存。
     def on_state(self, msg):
         if msg.data != self.state:
             self.targets.pop(self.state, None)
         self.state, self.state_stamp = msg.data, self.get_clock().now()
 
+    # 核对状态心跳、视觉时间戳和机器人 TF，计算完整法兰目标并检查工作空间。
+    # 目标消息保持视觉观测时间；反复 tick 不能把陈旧视觉刷新成有效目标。
     def tick(self):
         try:
             now = self.get_clock().now()
@@ -71,7 +79,9 @@ class ServoNode(Node):
             if not fresh(self, current_tf.header.stamp, 0.1):
                 raise ValueError('HOLD: stale robot state')
             current = tf_matrix(current_tf)
+            # first_seen / eth_primary 两种来源都使用 fine 距离；只有历史 handoff 的 COARSE 使用 coarse 距离。
             distance = self.fine if self.state == 'FINE' or self.selection_policy != 'handoff' else self.coarse
+            # 跟踪法兰时用单位矩阵，直接让法兰中心位于目标 -Z 的指定距离。
             extrinsic = self.X if self.tracking_frame == 'camera' else np.eye(4)
             desired = target_flange(pose_matrix(target.pose), extrinsic, distance)
             if not in_workspace(desired, self.minimum, self.maximum):
@@ -99,5 +109,6 @@ class ServoNode(Node):
             self.status.publish(String(data=str(exc)))
 
 
+# 运行目标计算节点，实体控制的使能与限制仍由 robot_bridge 负责。
 def main(args=None):
     spin(ServoNode, args)

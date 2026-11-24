@@ -1,3 +1,5 @@
+# 相机节点：按 EIH/ETH 角色绑定型号和序列号，发布 BGR 图像、CameraInfo 和元数据。
+# 采集在独立线程中运行；工厂内参可预览，但检测定位还要求通过 ChArUco 验证的内参。
 import json
 import threading
 import time
@@ -13,7 +15,9 @@ from .calibration import validate_intrinsic
 from .ros_utils import param, spin, LATCHED
 
 
+# 一个节点管理一台相机；由 launch 放入 /eih 或 /eth 命名空间。
 class CameraNode(Node):
+    # 连接相机并核对内参与设备身份/分辨率，成功后发布锁存信息并启动采集线程。
     def __init__(self):
         super().__init__('camera')
         role = param(self, 'role', 'eih')
@@ -49,6 +53,8 @@ class CameraNode(Node):
             self.stream.stop()
             raise
 
+    # 循环读帧并发布 Image；使用主机接收时间，不代表硬件曝光同步时间。
+    # 读帧或发布发生异常时停止本采集线程并记录错误，不用旧图像冒充新帧。
     def capture(self):
         while not self.stop_event.is_set():
             try:
@@ -67,6 +73,7 @@ class CameraNode(Node):
                     self.get_logger().error(f'Camera acquisition stopped: {exc}')
                 self.stop_event.set()
 
+    # 先通知采集退出并等待，再关闭相机，最后销毁 ROS 资源。
     def destroy_node(self):
         self.stop_event.set()
         self.worker.join(timeout=3)
@@ -74,5 +81,6 @@ class CameraNode(Node):
         return super().destroy_node()
 
 
+# 通过公共 spin 包装器运行节点，保证退出时调用上述清理。
 def main(args=None):
     spin(CameraNode, args)

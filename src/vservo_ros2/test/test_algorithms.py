@@ -1,3 +1,5 @@
+# 纯算法回归：合成几何与图像提供已知真值，验证坐标方向、标定、选择策略与限幅。
+# 测试不打开相机、不连接机器人；需要 NumPy、SciPy 和带 aruco 的 OpenCV。
 import cv2
 import numpy as np
 import pytest
@@ -11,10 +13,12 @@ from vservo_ros2.accuracy import report
 from vservo_ros2.board import ArucoMarker, Board
 
 
+# 用固定随机种子的生成器构造合法米制 SE(3) 样本。
 def random_pose(rng, scale=0.3):
     return transform(Rotation.from_rotvec(rng.normal(0, 0.6, 3)).as_matrix(), rng.normal(0, scale, 3))
 
 
+# 验证单标记只接受 ID42，原点为中心且 +Z 指入标记。
 def test_single_aruco_marker_pose_uses_center_and_inward_normal():
     marker = ArucoMarker(42, 0.08)
     K = np.array([[600., 0, 320], [0, 600., 240], [0, 0, 1]])
@@ -37,6 +41,7 @@ def test_single_aruco_marker_pose_uses_center_and_inward_normal():
         assert t < 0.005 and a < np.deg2rad(3)
 
 
+# 分别构造 EIH/ETH 精确配对，检查能恢复已知手眼及留出误差。
 @pytest.mark.parametrize('mode', ['eih', 'eth'])
 def test_handeye_known_ground_truth(mode):
     rng = np.random.default_rng(7)
@@ -49,6 +54,7 @@ def test_handeye_known_ground_truth(mode):
     assert out['reports']['heldout']['translation_m']['maximum'] < 1e-6
 
 
+# 退化单轴旋转和随机错配样本必须拒绝。
 def test_handeye_rejects_single_axis_and_bad_pairing():
     gs = [transform(Rotation.from_rotvec([0, 0, i*0.08]).as_matrix(), [0.1, i*0.01, 0.2]) for i in range(20)]
     with pytest.raises(ValueError, match='Degenerate'):
@@ -59,6 +65,7 @@ def test_handeye_rejects_single_axis_and_bad_pairing():
         handeye(gs, cs, 'eth')
 
 
+# 用已知 K 投影角点并加小噪声，检查内参恢复及留出误差。
 def test_intrinsic_recovers_synthetic_camera_and_heldout():
     rng = np.random.default_rng(4)
     K = np.array([[700., 0, 320], [0, 710., 240], [0, 0, 1]])
@@ -76,6 +83,7 @@ def test_intrinsic_recovers_synthetic_camera_and_heldout():
     assert result['heldout_rms_px']['maximum'] < 0.2
 
 
+# 样本不足或始终覆盖同一图像区域时不能通过求解。
 def test_intrinsic_rejects_low_count_and_coverage():
     with pytest.raises(ValueError, match='Need'):
         intrinsic([], [640, 480])
@@ -84,6 +92,7 @@ def test_intrinsic_rejects_low_count_and_coverage():
         intrinsic([(obj, np.ones((10, 2)))]*20, [640, 480])
 
 
+# 历史 handoff 确认必须来自不同帧，重复 tick 不凑数，过期后 HOLD。
 def test_selector_confirmations_require_distinct_frames_and_loss_holds():
     s = Selector(selection_policy='handoff')
     T = transform(t=[0.1, 0.2, 0.3])
@@ -100,6 +109,7 @@ def test_selector_confirmations_require_distinct_frames_and_loss_holds():
     assert s.choose(1.5)[0] == 'HOLD'
 
 
+# 启用一致性阻断时拒绝超差，未来帧不可用，旧帧不能覆盖新样本。
 def test_selector_rejects_disagreement_future_and_old_samples():
     s = Selector(require_pair_agreement=True, selection_policy='handoff')
     s.update('eth', 1, np.eye(4), 1)
@@ -110,6 +120,7 @@ def test_selector_rejects_disagreement_future_and_old_samples():
     assert s.samples['eth'][0] == 1
 
 
+# 验证历史交接窗中 ETH 丢失后 EIH 可接管，辅助偏差可显示但不强制阻断。
 def test_selector_hands_off_after_eth_loss_and_uses_eth_to_check_eih():
     s = Selector(selection_policy='handoff')
     target = transform(t=[0.2, 0.0, 0.5])
@@ -134,6 +145,7 @@ def test_selector_hands_off_after_eth_loss_and_uses_eth_to_check_eih():
     assert s.diagnostics['pair_status'] == 'inconsistent' and not s.diagnostics['pair_enforced']
 
 
+# 验证历史策略需近期粗定位，并在精定位丢失后按恢复延迟回到 ETH。
 def test_selector_requires_recent_coarse_acquisition_and_reacquires_after_fine_loss():
     s = Selector(confirmations=1, selection_policy='handoff')
     for stamp in (1.0, 2.01):
@@ -153,6 +165,7 @@ def test_selector_requires_recent_coarse_acquisition_and_reacquires_after_fine_l
     assert s.choose(2.91)[0] == 'COARSE'
 
 
+# 短时丢失允许 EIH 自恢复，长时失效清除历史交接资格。
 def test_eih_reacquires_without_eth_then_releases_lock_after_long_loss():
     s = Selector(confirmations=2, selection_policy='handoff')
     s.update('eth', 1.0, np.eye(4), 0.8)
@@ -171,6 +184,7 @@ def test_eih_reacquires_without_eth_then_releases_lock_after_long_loss():
     assert s.choose(4.11)[0] == 'HOLD'
 
 
+# 运行中降低速度上限，实际指令速度逐拍减小且不破坏加速度界限。
 def test_joint_speed_override_decelerates_without_acceleration_jump():
     limiter = JointLimiter(np.zeros(6), 0.15, 0.3)
     for _ in range(60):
@@ -184,6 +198,7 @@ def test_joint_speed_override_decelerates_without_acceleration_jump():
     assert limiter.v[0] == pytest.approx(0.03)
 
 
+# eth_primary 始终优先 ETH，偏差只诊断；ETH 丢失才用 EIH。
 def test_eth_has_priority_even_when_pair_disagrees_and_eih_takes_over_on_eth_loss():
     selector = Selector(require_pair_agreement=True, selection_policy='eth_primary')
     eth = transform(t=[0.2, 0.1, 0.4])
@@ -206,6 +221,7 @@ def test_eth_has_priority_even_when_pair_disagrees_and_eih_takes_over_on_eth_los
     assert selector.choose(1.74)[0] == 'COARSE'
 
 
+# 默认 first_seen 覆盖两种先后顺序、主导保持、丢失接管及恢复不抢占。
 @pytest.mark.parametrize('first,second', [('eih', 'eth'), ('eth', 'eih')])
 def test_first_seen_camera_keeps_control_until_it_loses_target(first, second):
     selector = Selector(require_pair_agreement=True)
@@ -234,6 +250,7 @@ def test_first_seen_camera_keeps_control_until_it_loses_target(first, second):
     assert selector.diagnostics['source'] == second
 
 
+# 首次主导依据图像时间而非回调到达顺序；未来观测不参与选择。
 def test_first_acquisition_uses_image_time_and_ignores_future_observations():
     selector = Selector()
     selector.update('eth', 1.02, np.eye(4), 0.5)
@@ -245,6 +262,7 @@ def test_first_acquisition_uses_image_time_and_ignores_future_observations():
     assert selector.diagnostics['source'] == 'eih'
 
 
+# 验证手眼连乘方向、悬停距离、预览单步限幅与坏矩阵拒绝。
 def test_transform_direction_hover_and_servo_limits():
     X = transform(t=[0.03, 0.0, 0.04])
     target = transform(Rotation.from_euler('xyz', [0.2, 0.3, 0.1]).as_matrix(), [0.2, 0.1, 0.5])
@@ -258,6 +276,7 @@ def test_transform_direction_hover_and_servo_limits():
         validate(np.zeros((4, 4)))
 
 
+# 检查 FR5 零位 FK 和邻近位姿的 FK→IK→FK 回环误差。
 def test_fk_ik_local_roundtrip_and_nominal_zero():
     m = Kinematics()
     assert np.allclose(m.fk(np.zeros(6))[:3, 3], [-0.82, -0.202, 0.05])
@@ -267,6 +286,7 @@ def test_fk_ik_local_roundtrip_and_nominal_zero():
     assert t < 1e-5 and a < 1e-5
 
 
+# 固定 10 mm 偏置可以有零散布，必须区分重复性与独立参考误差。
 def test_accuracy_bias_separate_from_repeatability():
     poses = [transform(t=[0.01, 0, 0])]*10
     assert report(poses)['translation_mm']['rms'] == pytest.approx(0, abs=1e-12)
@@ -275,6 +295,7 @@ def test_accuracy_bias_separate_from_repeatability():
     assert 'independent' in absolute['kind']
 
 
+# 错误角色、序列号或分辨率都不能复用内参。
 def test_intrinsic_metadata_isolation():
     data = dict(camera={'serial': 'A', 'role': 'eye_in_hand'}, image_size=[640, 480],
                 camera_matrix=[[300, 0, 320], [0, 300, 240], [0, 0, 1]], dist_coeffs=[0]*5)
@@ -284,6 +305,7 @@ def test_intrinsic_metadata_isolation():
             validate_intrinsic(data, role, serial, size)
 
 
+# 用合成 ChArUco 图检查角点数与正深度位姿。
 def test_rendered_board_detection():
     b = Board()
     raw = b.board.generateImage((700, 500))
@@ -295,6 +317,7 @@ def test_rendered_board_detection():
     assert obs.camera_T_target[2, 3] > 0
 
 
+# 目标多次反向时，按实际 q 差分检查指令速度/加速度仍受限。
 def test_joint_commands_bound_velocity_and_acceleration_on_reversals():
     limiter = JointLimiter(np.zeros(6), 0.15, 0.3)
     previous_q, previous_v = limiter.q.copy(), limiter.v.copy()

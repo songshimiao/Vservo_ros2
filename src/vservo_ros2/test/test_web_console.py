@@ -1,3 +1,4 @@
+# Web 业务回归：使用临时文件与 ROS 客户端替身，不启动实体相机或机器人。
 import json
 from pathlib import Path
 import shlex
@@ -15,17 +16,20 @@ from vservo_ros2.web.server import Console, authorize_action
 from vservo_ros2.web.workspace import Workspace, assess
 
 
+# 构造最小有效 EIH 内参字典，可切换序列号或验证标志。
 def intrinsic(serial='EIH', validated=True):
     return dict(validated=validated, camera=dict(serial=serial, role='eye_in_hand'),
                 image_size=[640, 480], camera_matrix=[[360, 0, 320], [0, 360, 240], [0, 0, 1]],
                 dist_coeffs=[0]*5)
 
 
+# 构造在线相机快照，测试文件与实际设备的身份/尺寸核对。
 def live(serial='EIH', size=None):
     return dict(online=True, size=size or [640, 480],
                 metadata=dict(camera=dict(serial=serial, role='eye_in_hand')))
 
 
+# 区分文件缺失、未验证、身份不符、尺寸不符和相机离线待核对。
 def test_file_missing_unvalidated_and_incompatible(tmp_path):
     path = tmp_path/'camera.json'
     assert not assess(path, 'eih', 'intrinsic', live())['exists']
@@ -38,6 +42,7 @@ def test_file_missing_unvalidated_and_incompatible(tmp_path):
     assert assess(path, 'eih', 'intrinsic', dict(online=False))['compatible'] is None
 
 
+# 错误手眼父坐标系或非法矩阵不能通过文件评估。
 def test_handeye_frame_and_matrix_checks(tmp_path):
     path = tmp_path/'handeye.json'
     data = dict(validated=True, mode='eih', camera=dict(serial='EIH', role='eye_in_hand'),
@@ -50,6 +55,7 @@ def test_handeye_frame_and_matrix_checks(tmp_path):
     assert not assess(path, 'eih', 'handeye', live())['valid']
 
 
+# 接收年龄与消息年龄都必须新鲜，未来 ROS 时间也应拒绝。
 def test_frame_receipt_and_ros_stamp_must_both_be_fresh():
     assert camera_status([], None, None, 4, 101)['online'] is False
     frames = [(1, 99.9), (1.1, 100)]
@@ -59,6 +65,7 @@ def test_frame_receipt_and_ros_stamp_must_both_be_fresh():
     assert not camera_status(frames, None, None, 1.2, 99)['online']
 
 
+# 普通相机日志不入告警缓存，WARN 正确保存且回调不崩溃。
 def test_camera_startup_log_keeps_ros_subscription_alive():
     link = SimpleNamespace(lock=threading.Lock(), values={})
     RosLink.camera_log(link, Log(name='eih.camera', level=20, msg='camera ready'))
@@ -67,6 +74,7 @@ def test_camera_startup_log_keeps_ros_subscription_alive():
     assert link.values['eih_camera_log'][1] == 'camera warning'
 
 
+# 含空格/单引号路径仍正确引用，备用命令保持只读并保护已有结果。
 def test_commands_quote_workspace_and_never_enable_motion(tmp_path):
     ws = Workspace(tmp_path/"site O'Brien")
     one = ws.new_session('eih', 'intrinsic', 'train')
@@ -84,6 +92,7 @@ def test_commands_quote_workspace_and_never_enable_motion(tmp_path):
     assert all('execute:=true' not in cmd and '/robot_bridge/arm' not in cmd for cmd in commands.values())
 
 
+# 采样/求解需匹配阶段、服务、检查项和只读状态，已有输出不可覆盖。
 def test_action_rejects_wrong_phase_unavailable_and_existing_output(tmp_path):
     ws = Workspace(tmp_path)
     session = ws.new_session('eih', 'handeye', 'train')
@@ -114,6 +123,7 @@ def test_action_rejects_wrong_phase_unavailable_and_existing_output(tmp_path):
     assert json.loads(ws.output(session['plan']).read_text()) == {'existing': 1}
 
 
+# ROS Trigger 失败原因原样返回网页，不把失败误写成成功。
 def test_trigger_failure_response_preserves_reason():
     response = SimpleNamespace(success=False, message='Need at least 8 ChArUco corners')
     future = SimpleNamespace(done=lambda: True, result=lambda: response,
@@ -125,6 +135,7 @@ def test_trigger_failure_response_preserves_reason():
         RosLink.trigger(link, 'robot_bridge', 'arm')
 
 
+# 验证会话不提供求解动作；必须有成功退出码，且标定内容变化后旧报告失效。
 def test_independent_session_has_no_solve_and_report_is_bound(tmp_path):
     ws = Workspace(tmp_path)
     source = ws.select('eih', 'intrinsic')
@@ -145,6 +156,7 @@ def test_independent_session_has_no_solve_and_report_is_bound(tmp_path):
     assert ws.verification('eih', 'intrinsic', source) is None
 
 
+# 按角色选择板规格，并固定到会话；验证阶段沿用来源标定的板尺寸。
 def test_web_sessions_bind_different_board_sizes_by_role_and_phase(tmp_path):
     ws = Workspace(tmp_path)
     sources = Path(__file__).resolve().parents[1]/'config'
@@ -174,6 +186,7 @@ def test_web_sessions_bind_different_board_sizes_by_role_and_phase(tmp_path):
     assert authorize_action(ws, snapshot, plan['name'], 'capture', True) == plan
 
 
+# 未知运动路由和 ../ 路径越界不能访问。
 def test_unknown_motion_route_and_file_escape_are_rejected(tmp_path):
     ws = Workspace(tmp_path)
     console = Console(ws, SimpleNamespace())
@@ -185,10 +198,12 @@ def test_unknown_motion_route_and_file_escape_are_rejected(tmp_path):
         ws.session_dir('../elsewhere')
 
 
+# 允许运动时可先开启持续请求等目标，之后人工停止；只读模式拒绝。
 def test_web_follow_starts_without_target_and_can_be_stopped(tmp_path):
     calls = []
     snapshot = dict(values=dict(robot='DISARMED'), tf=dict(ok=True))
 
+    # 记录 enable/disable 请求的服务替身，不发送硬件命令。
     def arm(value):
         calls.append(value)
         return dict(success=True, message='test bridge')
@@ -205,6 +220,7 @@ def test_web_follow_starts_without_target_and_can_be_stopped(tmp_path):
     assert calls == [True, False]
 
 
+# 只有 ROS 调速成功才保存新倍率，非法值或服务失败保留上次值。
 def test_web_speed_preserves_last_value_when_ros_rejects_request(tmp_path):
     link = SimpleNamespace(snapshot=lambda: {}, get_node_names_and_namespaces=lambda: [('robot_bridge', '/')],
                            set_speed=lambda value: dict(success=True, message='applied'))
@@ -220,6 +236,7 @@ def test_web_speed_preserves_last_value_when_ros_rejects_request(tmp_path):
     assert console.speed_percent == 35
 
 
+# 允许运动时启动监控传 auto_start/execute/所选速度，只读模式保留 execute=false。
 def test_monitor_start_requests_auto_follow_with_selected_speed(tmp_path):
     ws = Workspace(tmp_path)
     for role, mount in [('eih', 'eye_in_hand'), ('eth', 'eye_to_hand')]:
@@ -247,6 +264,7 @@ def test_monitor_start_requests_auto_follow_with_selected_speed(tmp_path):
     assert 'auto_start:=true' not in started[-1]
 
 
+# 一组参数一起提交；任一非法或 ROS 拒绝时整组不更新 Web 已选配置。
 def test_web_motion_profile_updates_atomically_and_keeps_draft_on_failure(tmp_path):
     config = tmp_path/'src/vservo_ros2/config/control.yaml'
     config.parent.mkdir(parents=True)

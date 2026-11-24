@@ -1,3 +1,5 @@
+# 定位节点：图像时刻的 base_T_camera × camera_T_target → base_T_target。
+# 再由 Selector 选择主相机，20 Hz 发布状态心跳；WAITING_TF 区分等待变换与真正双路丢失。
 import json
 import numpy as np
 from collections import deque
@@ -11,7 +13,9 @@ from .localization import Selector
 from .ros_utils import param, spin, stamp_s, fresh
 
 
+# 连接双相机观测、TF 缓冲和纯算法选择器，输出统一的基座系目标。
 class LocalizerNode(Node):
+    # 装载策略参数，为每路创建最多 10 帧的待转换队列，订阅位姿及可见性。
     def __init__(self):
         super().__init__('localizer')
         self.selector = Selector(max_age=param(self, 'max_age_s', 0.3),
@@ -44,6 +48,7 @@ class LocalizerNode(Node):
                                      lambda m, r=role: self.on_visibility(r, m), 1)
         self.create_timer(0.05, self.tick)
 
+    # 检查原始观测时效、坐标系、协方差与正深度，通过后排队等待对应图像时刻的 TF。
     def observe(self, role, msg):
         try:
             if not fresh(self, msg.header.stamp, self.selector.max_age) or msg.header.frame_id != f'{role}_optical_frame':
@@ -64,6 +69,8 @@ class LocalizerNode(Node):
             self.observation_errors[role] = str(exc)
             self.get_logger().debug(str(exc))
 
+    # 只用新鲜的负向可见性包作废旧样本；正向包不建立目标，必须另有有效米制位姿。
+    # 按时间戳删除旧样本与待处理帧，迟到的丢失包不能清除较新的目标。
     def on_visibility(self, role, msg):
         try:
             data = json.loads(msg.data)
@@ -86,6 +93,7 @@ class LocalizerNode(Node):
         except (ValueError, TypeError, KeyError):
             return
 
+    # 重试待处理帧的历史 TF，更新选择器、每路诊断和状态，再发布有原始时间戳的选中目标。
     def tick(self):
         # Dynamic robot TF may arrive just after an image. Retain the original
         # image time and retry briefly, rather than substituting latest TF.
@@ -121,6 +129,7 @@ class LocalizerNode(Node):
                                  else self.observation_errors.get(role, '') if not visible else '')
         # A visible target awaiting its image-time transform is not a loss of
         # both camera views. Hold motion while retrying TF; never start homing.
+        # 相机看见目标但坐标变换尚未就绪时输出 WAITING_TF，机器人桥等待指令且不会启动丢失复位。
         if state == 'HOLD' and any(c['visible'] for c in cameras.values()) and not any(c['localized'] for c in cameras.values()):
             state = 'WAITING_TF'
             self.selector.diagnostics.update(reason='waiting_tf', source=None)
@@ -137,5 +146,6 @@ class LocalizerNode(Node):
             self.pub.publish(msg)
 
 
+# 运行定位节点；没有有效观测时仍发布心跳状态，供机器人桥识别在线 HOLD。
 def main(args=None):
     spin(LocalizerNode, args)

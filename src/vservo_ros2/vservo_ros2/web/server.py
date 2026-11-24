@@ -1,3 +1,5 @@
+# Web 后端：127.0.0.1 HTTP 服务 → Console 工作流 → ROS 服务或受管理的节点进程。
+# 独立相机、标定与伺服监控按工作流切换；默认 Web 允许启动监控即持续伺服，--read-only 可覆盖。
 """Loopback-only browser console for calibration and visual servo."""
 import argparse
 from datetime import datetime
@@ -33,6 +35,7 @@ BRIDGE = ('robot_bridge', '/')
 SERVO_NODES = CAMERA_NODES | {BRIDGE, ('localizer', '/'), ('servo', '/')} | {('detector', f'/{r}') for r in ROLES}
 
 
+# 将实时快照转换为中文排查项：ROS 域、图像/USB、服务、标定匹配和法兰 TF。
 def diagnostics(snapshot, files, domain):
     result = [dict(name='ROS_DOMAIN_ID', ok=domain.isdecimal(), detail=domain,
                    hint='所有终端和 Web 服务使用同一域，现场默认 99。')]
@@ -70,6 +73,7 @@ def diagnostics(snapshot, files, domain):
     return result
 
 
+# 采样/求解前核对新鲜预览是否属于当前会话、模式、输出和板规格，防止 Trigger 打到其他节点。
 def authorize_action(workspace, snapshot, name, action, confirmed):
     """Bind each Trigger to the fresh preview of the exact session and mode."""
     plan = workspace.plan(name)
@@ -103,7 +107,9 @@ def authorize_action(workspace, snapshot, name, action, confirmed):
     return plan
 
 
+# HTTP 业务层，管理会话、运动参数草稿、进程组与操作日志。
 class Console:
+    # 速度初值读取 control.yaml，倍率初值为 100%；生成本次 Web 会话请求令牌。
     def __init__(self, workspace, link, allow_motion=False):
         self.ws = workspace
         self.link = link
@@ -125,6 +131,7 @@ class Console:
         self.log_path = self.ws.data / 'web' / 'operations.jsonl'
         self.log('startup', 'Web 操作台已启动')
 
+    # 线程安全追加 JSONL 操作日志，超过 1 MiB 时滚动保存上一份。
     def log(self, event, message):
         entry = dict(time=datetime.now().astimezone().isoformat(timespec='seconds'),
                      event=event, message=str(message)[:1000])
@@ -135,6 +142,7 @@ class Console:
             with self.log_path.open('a', encoding='utf-8') as out:
                 out.write(json.dumps(entry, ensure_ascii=False)+'\n')
 
+    # 合并 ROS 快照、标定候选/匹配/独立报告、进程状态和备用命令。
     def state(self, query):
         snapshot = self.link.snapshot()
         selections, files, candidates = {}, {}, {}
@@ -156,10 +164,12 @@ class Console:
                     speed_percent=self.speed_percent, motion_profile=dict(self.motion_profile),
                     commands=self.ws.commands(selections, snapshot['cameras']))
 
+    # 将浏览器选择解析为合法标定路径，再生成工作流所需固定启动命令。
     def launch_setup(self, selected, snapshot):
         selections = {r: {k: self.ws.select(r, k, selected.get(f'{r}_{k}', '')) for k in KINDS} for r in ROLES}
         return selections, self.ws.launch_commands(selections, snapshot['cameras'])
 
+    # 按内参/手眼模式复用或启动相机，手眼使用只读桥接，并启动绑定会话的采集节点。
     def start_calibration(self, body, snapshot, nodes):
         plan = self.ws.plan(body['name'])
         role, kind = plan['role'], plan['kind']
@@ -193,6 +203,7 @@ class Console:
                 raise ValueError('外部机器人桥需要处于 READ_ONLY')
         self.processes.start('calibration', self.ws.calibration_launch(plan, resume=True), CALIBRATION_NODES)
 
+    # 检查两路内参/手眼匹配及同分辨率，关闭自有旧入口，再带已选速度启动完整伺服。
     def start_servo(self, body, snapshot):
         selections, (_, _, servo, _) = self.launch_setup(body.get('selected', {}), snapshot)
         sizes = set()
@@ -206,6 +217,7 @@ class Console:
             raise ValueError('两路相机需使用相同的已标定分辨率')
         for name in ('calibration', 'bridge', 'cameras', 'servo'):
             self.processes.stop(name)
+        # 此分支使启动监控同时传 execute/hardware_ready/auto_start；是否允许运动由 Web 启动参数决定。
         if self.allow_motion:
             servo[servo.index('execute:=false')] = 'execute:=true'
             servo.append('hardware_ready:=true')
@@ -216,6 +228,7 @@ class Console:
                       f"max_joint_accel_rad_s2:={self.motion_profile['joint_accel_rad_s2']}"])
         self.processes.start('servo', servo, SERVO_NODES | CALIBRATION_NODES)
 
+    # 独立样本≥5 后运行验证脚本，先写临时报告，再提交 JSON 和真实退出码。
     def verify_calibration(self, name):
         plan = self.ws.plan(name)
         args, report = self.ws.verification_run(plan)
@@ -236,6 +249,7 @@ class Console:
         return dict(success=run.returncode == 0, message=f'独立验证退出码 {run.returncode}',
                     report=report.name, metrics=result['data'])
 
+    # 分派相机/监控/人工跟随/调速动作；运行中调速须 ROS 原子提交成功后才保存 Web 选择。
     def control(self, action, body):
         snapshot = self.link.snapshot()
         nodes = set(self.link.get_node_names_and_namespaces())
@@ -274,6 +288,7 @@ class Console:
                           else self.link.set_speed(float(percent)))
                 if not result['success']:
                     return result
+            # 运行中 ROS 拒绝时已提前返回；只有成功后才提交 Web 中的下一次启动速度。
             self.speed_percent = float(percent)
             self.motion_profile = profile
             return dict(success=True, message=f'运动速度已应用，倍率 {percent:g}%', percent=percent,
@@ -289,6 +304,7 @@ class Console:
             return self.link.arm(enable)
         return dict(success=True, message='请求已执行，实时状态见页面')
 
+    # 最多列出 200 个报告/退出码记录，并合并同名 JSON 与 .exit。
     def reports(self):
         paths = []
         if self.ws.reports.is_dir():
@@ -299,6 +315,7 @@ class Console:
                     break
         return sorted(set(paths), reverse=True)
 
+    # 返回报告内容与真实退出码；旧报告无 .exit 时只能明确标注推断结果。
     def report(self, name):
         if Path(name).suffix != '.json':
             raise ValueError('报告格式无效')
@@ -311,6 +328,7 @@ class Console:
         return dict(data=data, exit_code=code,
                     inferred_code=(0 if data['passed'] else 2) if data and type(data.get('passed')) is bool and code is None else None)
 
+    # POST 业务路由；对进程切换和服务调用加工作流锁，并记录成功或失败原因。
     def mutate(self, route, body):
         if route == '/api/page':
             self.log('page', '页面已打开')
@@ -364,15 +382,18 @@ class Console:
         raise FileNotFoundError(route)
 
 
+# 限制并发连接的多线程 HTTP 服务，避免图像轮询无限创建处理线程。
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
+    # 最多 16 个并发请求槽位，静态资源目录来自 ROS 安装包。
     def __init__(self, address, console, assets):
         self.console = console
         self.assets = assets
         self.slots = threading.BoundedSemaphore(16)
         super().__init__(address, Handler)
 
+    # 非阻塞领取槽位；已满则关闭连接，创建线程失败时归还槽位。
     def process_request(self, request, address):
         if not self.slots.acquire(blocking=False):
             self.shutdown_request(request)
@@ -383,6 +404,7 @@ class Server(ThreadingHTTPServer):
             self.slots.release()
             raise
 
+    # 为连接设置读取超时，并保证请求结束总会释放槽位。
     def process_request_thread(self, request, address):
         try:
             request.settimeout(8)
@@ -391,10 +413,13 @@ class Server(ThreadingHTTPServer):
             self.slots.release()
 
 
+# 提供静态页面、JSON API、图像/样本/报告，集中做请求来源和路径检查。
 class Handler(BaseHTTPRequestHandler):
+    # 关闭默认访问日志，避免高频图像请求刷屏；业务操作仍记入 Console 日志。
     def log_message(self, *_):
         pass  # Avoid noisy image polling logs.
 
+    # 统一发送类型/长度/禁缓存等响应头；attachment 用于文件下载。
     def send_bytes(self, body, content_type, status=200, attachment=False):
         self.send_response(status)
         self.send_header('Content-Type', content_type)
@@ -409,16 +434,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # UTF-8 序列化并拒绝 NaN/Inf，复用二进制响应函数。
     def send_json(self, result, status=200, attachment=False):
         self.send_bytes(json.dumps(result, ensure_ascii=False, allow_nan=False).encode(),
                         'application/json; charset=utf-8', status, attachment)
 
+    # GET 只读取资源，进入公共请求处理。
     def do_GET(self):
         self.handle_request(False)
 
+    # POST 执行业务动作，进入公共请求处理。
     def do_POST(self):
         self.handle_request(True)
 
+    # 校验 loopback Host；POST 另检查同源 Origin、JSON 类型、会话令牌和 8 KiB 请求上限。
     def handle_request(self, post):
         try:
             host = self.headers.get('Host', '')
@@ -448,6 +477,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(exc, (BrokenPipeError, ConnectionResetError, TimeoutError)):
                 self.send_json({'error': str(exc)}, 400)
 
+    # 读取白名单静态资源或 API；样本必须在会话清单内，报告路径须受工作区边界约束。
     def get_resource(self, route, query, app):
         if route in ('/charuco-a4.pdf', '/charuco-compact.pdf', '/aruco-42.pdf'):
             self.send_bytes((app.ws.root/'docs'/route[1:]).read_bytes(), 'application/pdf', attachment=True)
@@ -508,6 +538,7 @@ class Handler(BaseHTTPRequestHandler):
             raise FileNotFoundError()
 
 
+# 解析 Web 参数、创建 ROS 后台线程与本机 HTTP 服务；主线程统一处理信号并清理进程/连接。
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workspace', default=os.environ.get('WS', '/home/jetson/fairino_ws/Vservo_ros2'))
@@ -530,6 +561,7 @@ def main():
     signal.signal(signal.SIGINT, signal.default_int_handler)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     link = RosLink(args.preview_fps)
+    # 后台执行订阅和服务响应；HTTP 主线程负责最终退出，不让 ROS 信号单独遗留监听端口。
     def spin_ros():
         try:
             rclpy.spin(link)

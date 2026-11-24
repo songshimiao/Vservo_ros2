@@ -1,3 +1,5 @@
+# 检测节点：image_raw + CameraInfo → 本相机坐标系的 target_pose。
+# 每帧另发带原始时间戳的可见性消息，供定位器快速撤销丢失目标。
 import importlib
 import json
 import cv2
@@ -13,7 +15,9 @@ from .geometry import fill_pose, validate
 from .ros_utils import param, spin, LATCHED, board_from_params, fresh
 
 
+# 统一接入 ChArUco、单 ArUco 或外部米制 6D 插件；OpenCV 限制为单线程减少争用。
 class DetectorNode(Node):
+    # 选择检测实现并订阅图像、内参、元数据；target_id 是两路必须一致的物理目标标识。
     def __init__(self):
         super().__init__('detector')
         cv2.setNumThreads(1)
@@ -39,6 +43,8 @@ class DetectorNode(Node):
         self.create_subscription(String, f'/{self.role}/metadata', lambda m: setattr(self, 'meta', json.loads(m.data)), LATCHED)
         self.create_subscription(Image, f'/{self.role}/image_raw', self.detect, qos_profile_sensor_data)
 
+    # 检查图像时效、内参验证状态和尺寸，再检查位姿、协方差、ID 与 2 px 重投影门槛。
+    # 有效位姿保留图像 header；失败只发布 INVALID/visible=False，不重发上一次位姿。
     def detect(self, msg):
         visible, reason = False, ''
         try:
@@ -75,5 +81,6 @@ class DetectorNode(Node):
                 visible=visible, target_id=self.target_id, reason=reason))))
 
 
+# 启动单路检测节点；两路节点由 launch 分别创建。
 def main(args=None):
     spin(DetectorNode, args)

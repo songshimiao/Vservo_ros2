@@ -1,3 +1,4 @@
+# ROS 链路回归：合成图像/目标 + 带时间戳 TF，验证检测、定位、伺服预览与持续目标输出。
 """Render -> actual detector node -> timestamp TF -> selector -> PBVS topic.
 
 Synthetic images only; no cameras, robot SDK or movement.
@@ -23,6 +24,7 @@ from vservo_ros2.localizer_node import LocalizerNode
 from vservo_ros2.servo_node import ServoNode
 
 
+# 验证检测到目标经历史 TF 转到 base，再生成法兰目标；丢失时停止新有效输出。
 @pytest.mark.parametrize('overlap', [True, False])
 def test_ros_detection_to_servo_with_timestamped_tf_and_loss(tmp_path, overlap):
     calibration = tmp_path / 'handeye.json'
@@ -40,6 +42,7 @@ def test_ros_detection_to_servo_with_timestamped_tf_and_loss(tmp_path, overlap):
     fixture.create_subscription(PoseStamped, '/servo/next_flange_pose', received.append, 5)
     fixture.create_subscription(String, '/localization/state', lambda m: states.append(m.data), 5)
     secondary = fixture.create_publisher(PoseWithCovarianceStamped, '/eth/target_pose', 5)
+    # 将测试观测复制到另一相机话题，构造双路可比较样本。
     def mirror(msg):
         msg.header.frame_id = 'eth_optical_frame'
         secondary.publish(msg)
@@ -63,6 +66,7 @@ def test_ros_detection_to_servo_with_timestamped_tf_and_loss(tmp_path, overlap):
     # Static flange is valid at all times; production servo requires fresh dynamic
     # robot timestamp, so refresh header of the returned flange transform in test.
     real_lookup = servo.tf.lookup_transform
+    # 测试使用静态法兰 TF；此包装器刷新返回时间，使伺服节点的新鲜度检查可继续进行。
     def lookup(*args, **kwargs):
         result = real_lookup(*args, **kwargs)
         result.header.stamp = fixture.get_clock().now().to_msg()
@@ -111,6 +115,7 @@ def test_ros_detection_to_servo_with_timestamped_tf_and_loss(tmp_path, overlap):
         rclpy.shutdown()
 
 
+# 先给图像后补 TF，定位器应重试原始图像时刻，而不是替换成最新 TF。
 def test_localizer_retries_original_image_time_when_tf_arrives_later():
     rclpy.init()
     node = LocalizerNode()
@@ -146,10 +151,12 @@ def test_localizer_retries_original_image_time_when_tf_arrives_later():
         rclpy.shutdown()
 
 
+# 负向可见性应立即撤销该帧以前的目标，迟到丢失包不能删除更新观测。
 def test_stamped_detection_loss_switches_camera_before_pose_ttl_and_ignores_old_packets():
     rclpy.init()
     node = LocalizerNode()
     try:
+        # 生成带指定时间戳的相机系观测，以控制乱序与丢失情形。
         def observation(role):
             msg = PoseWithCovarianceStamped()
             msg.header.frame_id = f'{role}_optical_frame'
@@ -191,6 +198,7 @@ def test_stamped_detection_loss_switches_camera_before_pose_ttl_and_ignores_old_
         rclpy.shutdown()
 
 
+# 动态渲染 ID42，验证到位后仍持续跟随且 ETH 失效时 EIH 可继续输出。
 def test_rendered_id42_keeps_following_after_arrival_with_eih_fallback(tmp_path):
     path = tmp_path/'handeye.json'
     # A camera mounted beside the flange keeps an oblique view at arrival.
@@ -214,6 +222,7 @@ def test_rendered_id42_keeps_following_after_arrival_with_eih_fallback(tmp_path)
     detector_states = []
     fixture.create_subscription(String, '/eih/detector_status', lambda m: detector_states.append(m.data), 5)
 
+    # 缓存或推进测试法兰目标，用于闭环合成画面而不发送硬件运动。
     def follow(msg):
         nonlocal current
         current = pose_matrix(msg.pose)
@@ -221,6 +230,7 @@ def test_rendered_id42_keeps_following_after_arrival_with_eih_fallback(tmp_path)
 
     fixture.create_subscription(PoseStamped, '/servo/next_flange_pose', follow, 1)
 
+    # 构造测试当前法兰 TF，与相机安装和渲染场景保持一致。
     def flange_tf(*args):
         msg = TransformStamped()
         msg.header.stamp = fixture.get_clock().now().to_msg()

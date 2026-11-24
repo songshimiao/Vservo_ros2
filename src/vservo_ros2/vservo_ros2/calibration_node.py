@@ -1,3 +1,5 @@
+# 标定服务节点：手动采样 capture、求解 solve、低频预览；不连接机器人 RPC。
+# 内参采集仅需图像；手眼采集还需对应图像时刻与静止窗口两端的法兰 TF。
 from collections import deque
 import json
 from pathlib import Path
@@ -17,8 +19,10 @@ from .calibration import intrinsic, handeye
 from .ros_utils import param, spin, fresh, LATCHED, board_from_params
 
 
+# 管理单路、单模式、单会话的图像/角点/机器人位姿和结果文件。
 class CalibrationNode(Node):
     """Manual capture and solve services. Never connects to robot RPC or moves it."""
+    # 建立或恢复会话，恢复时核对角色、板模型和相机身份，防止混用采集数据。
     def __init__(self):
         super().__init__('calibration')
         self.role = param(self, 'role', 'eih')
@@ -65,10 +69,12 @@ class CalibrationNode(Node):
         self.preview_image = self.create_publisher(CompressedImage, '~/preview_image', qos_profile_sensor_data)
         self.create_timer(0.5, self.preview)
 
+    # 保存最新图像，并保留最近 12 帧用于等待 TF 与图像时间配对。
     def on_image(self, msg):
         self.image = msg
         self.recent_images.append(msg)
 
+    # 内参取最新图；手眼从新到旧寻找静止区间两端 TF 都可查询的新鲜图像。
     def synchronized_image(self):
         if self.mode == 'intrinsic' or self.image is None:
             return self.image
@@ -83,6 +89,8 @@ class CalibrationNode(Node):
                 return msg
         raise ValueError('等待图像时间戳及静止窗口对应的法兰 TF')
 
+    # 共用采样检查：身份/尺寸/角点/重复帧；手眼还检查已验证内参、静止和重复机器人姿态。
+    # 返回图像、可持久化样本和内参观察对；preview 参数只补充预览诊断，不保存样本。
     def prepare_sample(self, preview=None):
         msg = self.synchronized_image()
         if msg is None or self.info is None or self.meta is None or not fresh(self, msg.header.stamp, 0.3):
@@ -136,6 +144,7 @@ class CalibrationNode(Node):
             raise ValueError('This image was already captured')
         return image, sample, (obj, pix)
 
+    # 仅有订阅者时评估是否可采样，绘制角点并给出清晰度/过曝提示；不增加采样计数。
     def preview(self):
         if not self.preview_status.get_subscription_count():
             return
@@ -177,6 +186,7 @@ class CalibrationNode(Node):
                 status['preview_error'] = str(exc)
         self.preview_status.publish(String(data=json.dumps(status, allow_nan=False)))
 
+    # 先写 PNG，再原子更新 samples.json，成功后才提交内存样本；清单失败则移除本次图片。
     def capture(self, request, response):
         try:
             image, sample, observation = self.prepare_sample()
@@ -198,12 +208,14 @@ class CalibrationNode(Node):
             response.success, response.message = False, str(exc)
         return response
 
+    # 组织可恢复的会话清单，包含实物板参数、相机身份、内参和时间戳约定。
     def manifest(self):
         return dict(schema_version=1, role=self.role, mode=self.mode, board=self.board.spec,
                     camera=self.meta['camera'], intrinsics=self.meta,
                     image_size=[self.info.width, self.info.height], samples=self.samples,
                     timestamp_convention='host_receive_time; stationary capture required')
 
+    # 按模式调用纯数学求解，附上会话元数据；protect_output 可拒绝覆盖已有结果文件。
     def solve(self, request, response):
         try:
             if self.mode == 'intrinsic':
@@ -220,5 +232,6 @@ class CalibrationNode(Node):
         return response
 
 
+# 运行本路标定服务，供 CLI 或 Web 显式触发采样和求解。
 def main(args=None):
     spin(CalibrationNode, args)

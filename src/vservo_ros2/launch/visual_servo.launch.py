@@ -1,3 +1,5 @@
+# 完整链路入口：双相机 → 两路 detector → localizer → servo → robot_bridge。
+# 默认 launch 不允许运动；Web 是否覆盖 execute/auto_start 取决于其启动模式。
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -9,6 +11,7 @@ from pathlib import Path
 import yaml
 
 
+# 按“通用 YAML → robot_bridge 专属 YAML → 显式 launch 覆盖”顺序合并，确保调速覆盖真正生效。
 def robot_control_parameters(path, overrides):
     # Resolve robot defaults before applying launch overrides. An exact
     # /robot_bridge YAML selector otherwise beats launch's generated /** file.
@@ -18,6 +21,7 @@ def robot_control_parameters(path, overrides):
             **overrides}
 
 
+# 声明可覆盖参数并组装 LaunchDescription；此函数生成启动计划，实际节点由 ROS launch 创建。
 def generate_launch_description():
     share = get_package_share_directory('vservo_ros2')
     args = [DeclareLaunchArgument(k) for k in ('eih_intrinsics', 'eth_intrinsics', 'eih_handeye', 'eth_handeye')]
@@ -41,6 +45,7 @@ def generate_launch_description():
     args.append(IncludeLaunchDescription(PythonLaunchDescriptionSource(share+'/launch/dual_camera.launch.py'),
                 launch_arguments={k: LC(k) for k in ('eih_intrinsics', 'eth_intrinsics', 'eih_serial', 'eth_serial',
                                                     'width', 'height', 'fps')}.items()))
+    # 运行到 launch 上下文可求值时再解析速度覆盖；限制 BLAS/OMP 线程，减少规划与控制争用。
     def robot_action(context):
         overrides = {key: float(LC(key).perform(context)) for key in
                      ('linear_speed_m_s', 'angular_speed_rad_s', 'max_joint_accel_rad_s2')

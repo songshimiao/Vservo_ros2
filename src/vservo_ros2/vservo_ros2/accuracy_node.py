@@ -1,3 +1,4 @@
+# 精度采集节点：从指定基座系目标话题手动保存样本，可选状态过滤和独立参考。
 from pathlib import Path
 import numpy as np
 from rclpy.node import Node
@@ -8,7 +9,9 @@ from .geometry import pose_matrix, read_json, write_json
 from .ros_utils import param, spin, fresh
 
 
+# 只记录定位观测，不发送运动；重复性与绝对误差的计算在 accuracy.report。
 class AccuracyRecorder(Node):
+    # 读取输出/参考配置，缓存最新位姿及定位状态，开放 ~/capture 服务。
     def __init__(self):
         super().__init__('accuracy_recorder')
         self.output = Path(param(self, 'output', '/tmp/vservo_accuracy.json')).expanduser()
@@ -25,6 +28,7 @@ class AccuracyRecorder(Node):
         self.create_subscription(String, '/localization/state', lambda m: setattr(self, 'state', m.data), 5)
         self.create_service(Trigger, '~/capture', self.capture)
 
+    # 只接收指定坐标系的新鲜且未采过时间戳的位姿，满足状态过滤后原子落盘。
     def capture(self, request, response):
         try:
             m = self.msg
@@ -48,5 +52,6 @@ class AccuracyRecorder(Node):
         return response
 
 
+# 运行手动精度记录节点。
 def main(args=None):
     spin(AccuracyRecorder, args)

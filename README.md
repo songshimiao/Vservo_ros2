@@ -7,6 +7,27 @@ Gemini 335 为 ETH（固定外部相机），负责大范围搜索与粗定位�
 工程包含可运行的 ROS 2 节点、采集/求解服务、独立验证脚本及默认只读的 FR5 桥接。
 新安装的相机必须现场标定；本工程不附带虚构的手眼矩阵或精度结论。
 
+## 源码阅读顺序
+
+源码已按模块、类和函数补充中文注释，重点解释输入输出、坐标系、单位、异步任务和失败分支。
+建议先读算法再读 ROS 封装，最后读 Web；现场距离和速度以
+[`control.yaml`](src/vservo_ros2/config/control.yaml) 及节点实际参数为准。
+
+| 顺序 | 文件（相对 `src/vservo_ros2/vservo_ros2/`） | 阅读重点 |
+|------|-----------------------------------------|----------|
+| 1 | [`geometry.py`](src/vservo_ros2/vservo_ros2/geometry.py)、[`kinematics.py`](src/vservo_ros2/vservo_ros2/kinematics.py) | `A_T_B` 方向、米/弧度、FK 与 IK |
+| 2 | [`board.py`](src/vservo_ros2/vservo_ros2/board.py)、[`calibration.py`](src/vservo_ros2/vservo_ros2/calibration.py)、[`accuracy.py`](src/vservo_ros2/vservo_ros2/accuracy.py) | 检测门槛、两种手眼公式、重复性与独立参考 |
+| 3 | [`camera_node.py`](src/vservo_ros2/vservo_ros2/camera_node.py)、[`detector_node.py`](src/vservo_ros2/vservo_ros2/detector_node.py)、[`localizer_node.py`](src/vservo_ros2/vservo_ros2/localizer_node.py)、[`localization.py`](src/vservo_ros2/vservo_ros2/localization.py) | 图像时间、TF、首次可见主导、丢失交接、WAITING_TF |
+| 4 | [`servo_node.py`](src/vservo_ros2/vservo_ros2/servo_node.py)、[`control.py`](src/vservo_ros2/vservo_ros2/control.py)、[`robot_node.py`](src/vservo_ros2/vservo_ros2/robot_node.py) | 完整目标、预览微步、关节限幅、控制线程、复位和故障 |
+| 5 | [`calibration_node.py`](src/vservo_ros2/vservo_ros2/calibration_node.py)、[`cli.py`](src/vservo_ros2/vservo_ros2/cli.py) | 原始样本保存、静止检查、求解及独立验证 |
+| 6 | [`web/server.py`](src/vservo_ros2/vservo_ros2/web/server.py)、[`web/ros_link.py`](src/vservo_ros2/vservo_ros2/web/ros_link.py)、[`web/workspace.py`](src/vservo_ros2/vservo_ros2/web/workspace.py)、[`web/static/app.js`](src/vservo_ros2/vservo_ros2/web/static/app.js) | HTTP 动作如何进入 ROS、会话绑定、调速提交、图像显示 |
+
+数据流为 `camera → detector → localizer → servo → robot_bridge → ServoJ`；
+`robot_bridge` 同时发布 `base → flange` 动态 TF 和手眼静态 TF，供定位换算使用。
+`test/` 中每个测试也有中文说明，可结合对应模块阅读输入与预期行为。
+`vendor/` 是本工程维护的相机与 DH 副本；未纳入版本库的厂家 `Robot.py` SDK 保持原样，
+其使用方式和单位转换已在桥接调用处注明。
+
 请按 [完整装配、标定、验证和伺服操作手册](docs/操作手册.md) 顺序执行。
 接口、数据格式和 YOLO 接入见 [接口与扩展](docs/接口与扩展.md)。
 本次设备验证结果见 [验证记录](docs/验证记录.md)。

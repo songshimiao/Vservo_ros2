@@ -1,3 +1,5 @@
+# 内参与手眼的纯数学求解及验证。训练/留出拆分用于检查拟合，独立会话验证由 CLI 完成。
+# EIH 求 flange_T_camera，板相对 base 固定；ETH 求 base_T_camera，板相对 flange 固定。
 """Calibration math shared by ROS service and offline regression tools."""
 import cv2
 import numpy as np
@@ -5,6 +7,7 @@ from scipy.spatial.transform import Rotation
 from .geometry import validate, inverse, transform, mean_pose, error
 
 
+# 每第 4 个样本留出，其余训练；样本数不足时直接拒绝求解。
 def split_indices(n, minimum=12):
     if n < minimum:
         raise ValueError(f'Need >= {minimum} samples; recommend 25-40 diverse samples')
@@ -13,6 +16,7 @@ def split_indices(n, minimum=12):
     return train, held
 
 
+# 汇总均值、RMS、95 分位和最大值；单位沿用输入，拒绝空集合及非有限数据。
 def stats(values):
     v = np.asarray(values, float)
     if v.size == 0 or not np.isfinite(v).all():
@@ -21,6 +25,7 @@ def stats(values):
                 p95=float(np.percentile(v, 95)), maximum=float(v.max()))
 
 
+# 用待验证内参求每帧板位姿，再计算图像重投影 RMS（像素）。
 def reprojection(obj, pix, K, D):
     ok, r, t = cv2.solvePnP(obj, pix, K, D)
     if not ok or not np.isfinite(t).all() or t[2, 0] <= 0:
@@ -29,6 +34,7 @@ def reprojection(obj, pix, K, D):
     return float(np.sqrt(np.mean(np.sum((q-pix.reshape(-1, 2))**2, axis=1))))
 
 
+# 检查样本数和双轴图像覆盖，用训练帧求 K/D，再用留出帧检验最大重投影误差。
 def intrinsic(observations, size, max_rms_px=1.0):
     train, held = split_indices(len(observations), 16)
     objects = [np.asarray(x[0], np.float32) for x in observations]
@@ -49,6 +55,7 @@ def intrinsic(observations, size, max_rms_px=1.0):
                 validated=True)
 
 
+# 对相对旋转向量做 SVD，要求至少两个独立旋转方向，避免退化手眼运动。
 def diverse(poses):
     rotations = np.array([Rotation.from_matrix(inverse(poses[0])[:3, :3] @ p[:3, :3]).as_rotvec()
                           for p in poses[1:]])
@@ -58,18 +65,22 @@ def diverse(poses):
     return singular.tolist()
 
 
+# 按安装方式构造应保持不变的板位姿：EIH 的 base_T_board 或 ETH 的 flange_T_board。
 def invariants(robot, camera, X, mode):
     if mode == 'eih':
         return [g @ X @ c for g, c in zip(robot, camera)]  # base_T_board constant
     return [inverse(g) @ X @ c for g, c in zip(robot, camera)]  # flange_T_board constant
 
 
+# 将各帧不变量与固定参考比较，返回平移（米）和旋转（度）的统计。
 def evaluate_handeye(robot, camera, X, mode, reference):
     pairs = [error(reference, p) for p in invariants(robot, camera, X, mode)]
     return dict(translation_m=stats([p[0] for p in pairs]),
                 rotation_deg=stats([np.degrees(p[1]) for p in pairs]))
 
 
+# PARK 法求手眼；ETH 先反转机器人位姿，复用 OpenCV 的 EIH 形式。
+# 训练与留出集都满足一致性门槛后，才输出 validated=True 的结果与坐标系元数据。
 def handeye(robot, camera, mode, max_translation_m=0.01, max_rotation_deg=2.0):
     if mode not in ('eih', 'eth') or len(robot) != len(camera):
         raise ValueError('Mode or paired samples invalid')
@@ -96,6 +107,7 @@ def handeye(robot, camera, mode, max_translation_m=0.01, max_rotation_deg=2.0):
                 reports=reports)
 
 
+# 检查序列号、安装角色、分辨率和 K/D 数值，避免交叉使用另一台相机的内参。
 def validate_intrinsic(data, role, serial, size):
     meta = data['camera']
     if (meta['serial'] != serial or data['image_size'] != list(size)

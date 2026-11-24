@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- 页面骨架；动态内容、按钮动作与轮询在 app.js；样式在 style.css。 -->
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -14,6 +15,7 @@
     <div class="top-status"><span id="connection" class="badge" role="status">正在连接</span><span id="domain" class="badge">ROS 域 —</span></div>
   </header>
   <div class="layout">
+    <!-- 导航按钮 data-view 与 section 的 id 对应，由前端 show 切换可见性。 -->
     <nav aria-label="操作台导航">
       <button data-view="overview" aria-current="page"><span>01</span> 工作流总览</button>
       <button data-view="intrinsic"><span>02</span> 内参与验证</button>
@@ -26,6 +28,7 @@
     </nav>
     <main>
       <div id="toast" class="toast" hidden role="status"></div>
+      <!-- 总览：相机在线情况、工作流、所选标定与历史对比由后端状态填充。 -->
       <section id="overview" class="view">
         <div class="section-title"><div><h2>标定与视觉伺服</h2><p>已有合格标定可继续使用，也可另建会话重标。</p></div><button data-action="diagnose">运行诊断</button></div>
         <div class="actions"><button data-action="start-cameras" class="primary">启动或重载双相机</button><a href="/charuco-a4.pdf" download="charuco-a4.pdf">下载 A4 标定板</a></div>
@@ -33,10 +36,12 @@
         <div class="panel"><h3>步骤与阻断原因</h3><div id="workflow"></div></div>
         <div class="panel"><h3>所选标定与历史对比</h3><p class="muted">切换标定结果后，启动采集或重载伺服监控以加载所选文件。</p><div id="files"></div></div>
       </section>
+      <!-- 内参向导容器；实际控件由 buildWizard 创建，两种用途为训练和独立验证。 -->
       <section id="intrinsic" class="view" hidden>
         <div class="section-title"><div><p class="eyebrow">相机参数</p><h2>内参标定与独立验证</h2><p>覆盖画面中心、边缘和角落，改变板的距离和倾角。训练最少 16 张，建议 25–40 张。</p></div></div>
         <div class="wizard"></div>
       </section>
+      <!-- 手眼页展示两种板固定方式；两个相机必须使用各自的物理安装约定。 -->
       <section id="handeye" class="view" hidden>
         <div class="section-title"><div><h2>手眼标定与独立验证</h2><p>完成本阶段的独立验证后再拆板。EIH 与 ETH 使用各自的会话。<a href="/camera-layout.svg" target="_blank" rel="noopener">共平台安装示意</a></p></div></div>
         <div class="grid mounting">
@@ -45,6 +50,7 @@
         </div>
         <div class="wizard"></div>
       </section>
+      <!-- 监控与运动控制：显示值由 app.js 更新，实际参数和动作由后端及 ROS 桥接校验。 -->
       <section id="servo" class="view" hidden>
         <div class="section-title"><div><h2>双画面伺服监控</h2><p>目标为 ArUco ID 42，标记边长 80 mm。<a href="/aruco-42.pdf" download="aruco-42.pdf">下载目标标记</a></p><p id="servo-start-hint"></p></div><span id="servo-mode" class="badge neutral">等待机器人状态</span></div>
         <div class="panel"><div id="servo-actions" class="actions"></div></div>
@@ -66,14 +72,17 @@
         <p>ID42 坐标轴：X 红、Y 绿、Z 蓝（指入标记），原点为标记中心。有效检测时显示，目标丢失后自动清除。</p>
         <div id="servo-state"></div>
       </section>
+      <!-- 会话画廊只标记重采，不自动修改求解所用原始清单。 -->
       <section id="sessions" class="view" hidden>
         <div class="section-title"><div><p class="eyebrow">采样数据</p><h2>标定会话</h2><p>可标记坏样本并在新会话重采。标记保留原图与清单，求解仍读取原始清单。</p></div><button data-action="refresh-sessions">刷新列表</button></div>
         <div class="panel"><label>会话 <select id="session-list"></select></label><div id="session-detail"></div></div>
       </section>
+      <!-- 独立验证报告与真实退出码，不能仅因存在 JSON 文件就判定通过。 -->
       <section id="reports" class="view" hidden>
         <div class="section-title"><div><p class="eyebrow">独立检验</p><h2>验证报告</h2><p>查看重投影误差、手眼一致性和定位精度。使用独立数据集执行验证脚本。</p></div><button data-action="refresh-reports">刷新报告</button></div>
         <div class="panel"><label>报告 <select id="report-list"></select></label><div id="report-detail"></div></div>
       </section>
+      <!-- 诊断聚合 ROS/TF/相机状态及自有进程日志。 -->
       <section id="diagnostics" class="view" hidden>
         <div class="section-title"><div><p class="eyebrow">排查与记录</p><h2>系统诊断</h2><p>检查 ROS 连接、相机、服务、法兰 TF、标定和机器人状态。</p></div><button class="primary" data-action="diagnose">运行诊断</button></div>
         <div class="panel" id="diagnostic-result"><p>点击运行诊断，生成当前检查结果。</p></div>

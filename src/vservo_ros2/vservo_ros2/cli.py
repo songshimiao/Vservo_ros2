@@ -1,3 +1,4 @@
+# 离线工具入口：生成板图、重算标定、独立内参/手眼验证、统计精度；不访问机械臂。
 import argparse
 from pathlib import Path
 import sys
@@ -9,6 +10,7 @@ from .calibration import intrinsic, handeye, reprojection, stats, evaluate_hande
 from .accuracy import report
 
 
+# 先解析子命令，再校验会话身份并执行数学计算；报告不通过返回码 2，数据/运行错误返回码 1。
 def main(args=None):
     p = argparse.ArgumentParser(description='Offline calibration and accuracy evaluation (never moves robot)')
     sub = p.add_subparsers(dest='cmd', required=True)
@@ -34,6 +36,7 @@ def main(args=None):
     s.add_argument('--max-deg', type=float, default=2.0)
     a = p.parse_args(args)
     try:
+        # 生成板图后须按真实物理尺寸打印并实测边长；图像像素数本身不决定米制尺寸。
         if a.cmd == 'board':
             board = Board(square_m=a.square_m, marker_m=a.marker_m)
             image = board.board.generateImage((1400, 1000), marginSize=0, borderBits=1)
@@ -42,6 +45,7 @@ def main(args=None):
                 raise IOError('Cannot write board')
             print(f'Board saved. Print active chessboard area at {7*a.square_m*1000:.1f} x {5*a.square_m*1000:.1f} mm; verify with ruler.')
             return
+        # accuracy 允许无参考的重复性报告；有 references 时才计算独立参考误差。
         if a.cmd == 'accuracy':
             data = read_json(a.input)
             result = report(data['poses'], data.get('references'))
@@ -49,6 +53,7 @@ def main(args=None):
         else:
             data = read_json(a.session)
             samples = data['samples']
+            # 从已保存会话重新求解，不打开相机；求解内部仍保留训练/留出验证。
             if a.cmd == 'solve':
                 if data['mode'] == 'intrinsic':
                     result = intrinsic([(s['object_points'], s['image_points']) for s in samples], data['image_size'])
@@ -80,6 +85,7 @@ def main(args=None):
                     result['passed'] = (result['translation_m']['maximum']*1000 <= a.max_mm
                                         and result['rotation_deg']['maximum'] <= a.max_deg)
                 result['independent_session'] = str(Path(a.session).resolve()) != str(Path(calibration['session_dir']).resolve() / 'samples.json')
+                # 独立验收必须换采集会话，不能拿求解时同一份 samples.json 冒充独立验证。
                 if not result['independent_session']:
                     raise ValueError('Use a NEW capture session for independent evaluation')
         write_json(a.out, result)

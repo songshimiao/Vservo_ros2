@@ -1,3 +1,5 @@
+# Web 与 ROS 的适配层：订阅只保存轻量缓存，JPEG/坐标轴在独立编码线程生成。
+# 缓存锁只保护拷贝/提交；耗时绘制和编码放在锁外，避免拖住图像回调。
 """ROS subscriptions and Trigger clients. JPEG encoding is outside the executor."""
 from collections import deque
 import json
@@ -26,6 +28,7 @@ FRAME_TIMEOUT = 1.5
 WARN_LEVEL = int.from_bytes(Log.WARN, 'big') if isinstance(Log.WARN, bytes) else Log.WARN
 
 
+# 结合主机接收年龄和 ROS 图像年龄判断在线；帧率从最近接收窗口估算，不等于硬件同步帧率。
 def camera_status(frames, dimensions, metadata, now, ros_now):
     last = frames[-1] if frames else None
     age = ros_now - last[1] if last else None
@@ -35,6 +38,7 @@ def camera_status(frames, dimensions, metadata, now, ros_now):
                 stamp=last[1] if last else None, metadata=metadata)
 
 
+# 把 ROS Pose 转成 JSON 字段；拒绝非有限值，输出米与 xyzw 四元数。
 def pose_fields(msg):
     p, q = msg.pose.position, msg.pose.orientation
     values = [p.x, p.y, p.z, q.x, q.y, q.z, q.w]
@@ -44,7 +48,9 @@ def pose_fields(msg):
                 stamp=stamp_s(msg.header.stamp))
 
 
+# 汇聚相机、标定预览、定位、机器人状态和服务客户端，供 HTTP 线程读取。
 class RosLink(Node):
+    # 建立双路订阅、服务客户端与 TF 监听，启动限制帧率的后台编码线程。
     def __init__(self, preview_fps):
         super().__init__('vservo_web_console')
         self.lock = threading.Lock()
@@ -97,12 +103,14 @@ class RosLink(Node):
         self.encoder = threading.Thread(target=self.encode, args=(1/preview_fps,), daemon=True)
         self.encoder.start()
 
+    # 从 /rosout 缓存相机 WARN 及以上日志，用于解释 USB 占用或采集故障。
     def camera_log(self, msg):
         role = next((r for r in ROLES if msg.name == f'{r}.camera'), None)
         if role and msg.level >= WARN_LEVEL:
             with self.lock:
                 self.values[f'{role}_camera_log'] = (time.monotonic(), msg.msg)
 
+    # 容错解析字典 JSON；非法常量转为 None，格式错误返回 None。
     @staticmethod
     def decode(raw):
         try:
@@ -111,14 +119,17 @@ class RosLink(Node):
         except (ValueError, RecursionError):
             return None
 
+    # 按角色缓存相机元数据，后续用于标定文件与在线设备核对。
     def meta(self, role, raw):
         with self.lock:
             self.metadata[role] = self.decode(raw)
 
+    # 缓存一般状态及单调接收时刻，snapshot 据此淘汰过期状态。
     def value(self, key, value):
         with self.lock:
             self.values[key] = (time.monotonic(), value)
 
+    # 保存最新原图引用、帧率窗口和短历史；最多保留 12 帧/约 0.4 s 用于精确匹配检测。
     def image(self, role, msg):
         now = time.monotonic()
         with self.lock:
@@ -132,20 +143,24 @@ class RosLink(Node):
             while self.image_history[role] and now-self.image_history[role][0][0] > 0.4:
                 self.image_history[role].popleft()
 
+    # 缓存本相机 CameraInfo，供坐标轴投影使用。
     def intrinsics(self, role, msg):
         with self.lock:
             self.camera_info[role] = msg
 
+    # 仅缓存对应 optical_frame 的检测位姿，绘制时还要检查时间、ID 状态与图像匹配。
     def target_pose(self, role, msg):
         if msg.header.frame_id == f'{role}_optical_frame':
             with self.lock:
                 self.target_poses[role] = (time.monotonic(), msg)
 
+    # 标定节点已生成的 JPEG 可直接缓存，无需再次解码和编码。
     def overlay(self, role, msg):
         if msg.format == 'jpeg':
             with self.lock:
                 self.jpegs[role, 'overlay'] = (time.monotonic(), stamp_s(msg.header.stamp), bytes(msg.data))
 
+    # 按预览频率编码最新原图，精确匹配 ID42 位姿后绘制 servo 图；无有效轴时复用原图 JPEG。
     def encode(self, period):
         previous = {}
         previous_servo = {}
@@ -200,6 +215,7 @@ class RosLink(Node):
                     self.get_logger().warning(f'JPEG {role}: {exc}')
             self.stop.wait(max(0, period-(time.monotonic()-started)))
 
+    # 汇总仍新鲜的状态、相机在线情况、服务可用性、法兰 TF 和标定节点数量。
     def snapshot(self):
         with self.lock:
             now, ros_now = time.monotonic(), self.get_clock().now().nanoseconds/1e9
@@ -224,6 +240,7 @@ class RosLink(Node):
                     speed_available=self.speed_client.service_is_ready(),
                     calibration_nodes=calibration_nodes, ros_now=ros_now)
 
+    # HTTP 取图时再次核对年龄；servo 轴已失效则退回无轴原图，防止旧轴继续显示。
     def jpeg(self, role, variant):
         now, ros_now = time.monotonic(), self.get_clock().now().nanoseconds/1e9
         with self.lock:
@@ -238,13 +255,16 @@ class RosLink(Node):
                 return frame[2]
         return None
 
+    # 以相机角色分组调用 capture/solve；同一路未完成时拒绝重复服务请求。
     def trigger(self, role, action, timeout=40):
         key = role, action
         return RosLink.call(self, role, self.trigger_clients[key], Trigger.Request(), timeout)
 
+    # 调用 robot_bridge 的 SetBool 服务，切换持续跟随请求。
     def arm(self, enabled):
         return self.call('robot', self.arm_client, SetBool.Request(data=enabled), 3)
 
+    # 把 Web 的百分比、mm/s、°/s 换成 ROS 参数单位，一次原子提交所有运动参数。
     def set_speed(self, percent, profile=None):
         values = dict(speed_scale=percent/100)
         if profile is not None:
@@ -258,6 +278,7 @@ class RosLink(Node):
         return self.call('speed', self.speed_client, request, 3, convert=lambda response: dict(
             success=response.result.successful, message=response.result.reason or '运动速度已应用'))
 
+    # 异步发 ROS 请求，HTTP 线程等待完成事件；超时不代表服务端操作已取消，保留 inflight 防重入。
     def call(self, group, client, request, timeout, convert=service_result):
         with self.lock:
             pending = self.inflight.get(group)
@@ -276,6 +297,7 @@ class RosLink(Node):
         except Exception as exc:
             return dict(success=False, message=str(exc))
 
+    # 停止并等待编码线程；ROS 节点销毁由 server.main 统一完成。
     def close(self):
         self.stop.set()
         self.encoder.join()

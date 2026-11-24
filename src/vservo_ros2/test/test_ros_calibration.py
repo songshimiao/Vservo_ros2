@@ -1,3 +1,4 @@
+# 标定节点回归：ROS 消息与 TF 都由测试构造，图像为合成板，不使用实体硬件。
 import numpy as np
 import rclpy
 from geometry_msgs.msg import TransformStamped
@@ -10,6 +11,7 @@ from vservo_ros2.calibration_node import CalibrationNode
 from vservo_ros2.geometry import fill_tf
 
 
+# 采样应同时保存原图/清单，拒绝重复帧、身份变化和不足样本求解。
 def test_capture_preserves_raw_data_rejects_duplicates_and_small_solve(tmp_path):
     rclpy.init(args=['--ros-args', '-p', f'session_dir:={tmp_path}/session', '-p', f'output:={tmp_path}/result.json'])
     node = CalibrationNode()
@@ -39,6 +41,7 @@ def test_capture_preserves_raw_data_rejects_duplicates_and_small_solve(tmp_path)
         rclpy.shutdown()
 
 
+# 最新图像缺少 TF 时，选择仍新鲜且静止区间两端都可查询 TF 的较早帧。
 def test_handeye_capture_uses_latest_frame_with_bracketing_tf(tmp_path):
     rclpy.init(args=['--ros-args', '-p', 'mode:=handeye', '-p', f'session_dir:={tmp_path}'])
     node = CalibrationNode()

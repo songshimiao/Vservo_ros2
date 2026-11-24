@@ -1,3 +1,4 @@
+// 前端主线：拉取 /api/state → 按当前视图渲染；按钮 POST 动作；图像使用独立轮询。
 (function frontend(){
 'use strict';
 const $ = id => document.getElementById(id);
@@ -11,6 +12,7 @@ const checks = [
   '当前相机在本阶段采样姿态中能稳定看到标定板', '机器人使用法兰 tool0，未混用带偏置的 TCP',
   '机器人桥为 READ_ONLY，法兰 TF 连续', '按本阶段固定板，拍摄前停稳至少 1 秒'
 ];
+// 页面状态与向导状态独立；selected 只持久化标定选择，speedEdited 保留尚未提交的调速草稿。
 let view = 'overview';
 let state = null;
 let token = '';
@@ -21,9 +23,11 @@ let gallery = null;
 let busy = false;
 let speedEdited = false;
 let refreshedPage = false;
+// 命令文本按键缓存；WeakMap 跟踪图像 blob URL 和上次 HTML，减少重复 DOM 替换与内存泄漏。
 const commandValues = new Map();
 const urls = new WeakMap();
 const rendered = new WeakMap();
+// 进入 HTML 模板的外部文本必须转义；普通提示优先用 textContent。
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char =>
   ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
 const badge = (text, tone = 'neutral') => `<span class="badge ${tone}">${esc(text)}</span>`;
@@ -32,12 +36,14 @@ const localTime = value => Number.isFinite(value) ? new Date(value * 1000).toLoc
 const pre = data => `<pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
 const path = (name, params = {}) => `/api/${name}?${new URLSearchParams(params)}`;
 
+// 将板的米制尺寸转换为 mm 供阅读；不修改用于求解的原参数。
 function boardLabel(board) {
   if (!board) return '规格未记录';
   const mm = value => (value * 1000).toLocaleString('zh-CN', {maximumFractionDigits: 3});
   return `${board.squares_x} × ${board.squares_y} 格 · 格长 ${mm(board.square_m)} mm · 标记边长 ${mm(board.marker_m)} mm`;
 }
 
+// 仅在内容改变时替换 innerHTML，避免每秒刷新破坏控件焦点和交互。
 function renderHTML(el, html) {
   if (typeof el === 'string') el = $(el);
   if (rendered.get(el) !== html) {
@@ -45,6 +51,7 @@ function renderHTML(el, html) {
     rendered.set(el, html);
   }
 }
+// GET 读状态；传 body 时 POST JSON 并带后端会话令牌；动作等待时间长于状态读取。
 async function api(url, body) {
   const options = {cache: 'no-store', signal: AbortSignal.timeout(body === undefined ? 5000 : 47000)};
   if (body !== undefined) {
@@ -57,11 +64,13 @@ async function api(url, body) {
   if (!response.ok) throw Error(data.error || `HTTP ${response.status}`);
   return data;
 }
+// 显示操作反馈，使用文本赋值避免把错误内容当作 HTML 执行。
 function notice(text, tone = 'good') {
   $('toast').textContent = text;
   $('toast').className = `toast ${tone}`;
   $('toast').hidden = false;
 }
+// 渲染备用终端命令，复制按钮通过缓存键取回原始多行命令。
 function commandCards(commands, namespace) {
   return Object.entries(commands || {}).map(([label, cmd], i) => {
     const key = `${namespace}-${i}`;
@@ -69,6 +78,7 @@ function commandCards(commands, namespace) {
     return `<div class="command"><div class="row"><strong>${esc(label)}</strong><button data-copy="${key}">复制</button></div><pre>${esc(cmd)}</pre></div>`;
   }).join('');
 }
+// 显示在线、序列号、分辨率、帧率、帧龄和已加载内参来源。
 function cameraMeta(camera) {
   if (!camera) return '等待 ROS 图像和 metadata';
   const meta = camera.metadata || {};
@@ -77,21 +87,26 @@ function cameraMeta(camera) {
     最近帧 ${localTime(camera.stamp)} · 年龄 ${fmt(camera.age_s)} s<br>
     ${esc(meta.source || '等待 metadata')} · ${meta.validated === true ? '已验证内参已加载' : '未加载已验证内参'}`;
 }
+// 区分文件不存在、内容有效、待在线核对、与设备兼容四类状态。
 function fileText(file) {
   if (!file) return '等待文件检查';
   if (file.compatible === true) return '已完成 · 可跳过';
   if (file.valid && file.compatible === null) return '文件通过 · 等待相机';
   return file.exists ? '需核对或重标' : '未标定';
 }
+// 把文件核对状态映射到 UI 的绿/黄/红提示。
 function fileTone(file) {
   return file?.compatible === true ? 'good' : file?.valid ? 'warn' : 'bad';
 }
+// 角色与类型组合成稳定选择键，例如 eih_intrinsic。
 function keyFor(role, kind) { return `${role}_${kind}`; }
+// 保存标定文件选择并刷新核对；选择文件本身不重启节点加载。
 function setSelected(role, kind, value) {
   selected[keyFor(role, kind)] = value;
   localStorage.setItem('vservo-calibration', JSON.stringify(selected));
   void refreshState();
 }
+// 按内参、独立验证、两路手眼及监控顺序计算已完成步骤和当前阻断原因。
 function workflow() {
   const stages = [
     ['双路内参', 'intrinsic', 'train', roles],
@@ -123,6 +138,7 @@ function workflow() {
   rows.push(`<div class="step"><strong>双画面伺服 ${badge(monitorReady ? '监控在线' : '等待启动', monitorReady ? 'good' : 'warn')}</strong><div class="muted">${blocked ? '检查前序标定及验证。' : '在监控页启动双画面并观察单标记定位。'}</div><button data-view="servo">打开监控</button></div>`);
   renderHTML('workflow', rows.join(''));
 }
+// 总览同时展示在线相机、工作流与标定历史对比。
 function renderOverview() {
   renderHTML('overview-cameras', roles.map(r =>
     `<article class="panel"><h3>${labels[r]}</h3><div class="camera-meta">${cameraMeta(state.cameras[r])}</div></article>`).join(''));
@@ -140,6 +156,7 @@ function renderOverview() {
       ${comparison ? `<details><summary>查看标定对比</summary><div>${comparison}</div></details>` : ''}</div>`;
   })).join(''));
 }
+// 一次性创建内参/手眼向导的固定 DOM；后续由 renderWizard 更新具体状态。
 function buildWizard(kind) {
   const root = $(kind).querySelector('.wizard');
   root.innerHTML = `<div class="panel">
@@ -150,6 +167,7 @@ function buildWizard(kind) {
       <div class="panel"><h3>实时采集条件</h3><div class="wizard-preview"></div><div class="wizard-actions"></div><div class="wizard-result" role="status"></div></div>
     </div><details class="panel"><summary>会话备用命令</summary><div class="wizard-commands"></div></details>`;
 }
+// 绑定当前会话与预览的角色/模式/输出/板规格，计算采样和求解按钮是否可用。
 function renderWizard(kind) {
   const root = $(kind).querySelector('.wizard');
   const find = selector => root.querySelector(selector);
@@ -229,6 +247,7 @@ function renderWizard(kind) {
   renderHTML(find('.wizard-commands'), session ? commandCards(session.commands, kind) :
     `<p>创建会话后生成独立路径。${purpose === 'check' ? '验证脚本读取会话清单、所选标定文件并写入独立报告。' : '启动采集节点后可在此调用采集和求解。'}</p>`);
 }
+// 显示双路定位/TF/控制诊断；区分用户调速草稿与桥接已确认参数，避免轮询覆盖输入。
 function renderServo() {
   const values = state?.values || {};
   for (const role of roles) renderHTML(`servo-${role}`, cameraMeta(state?.cameras?.[role]));
@@ -316,6 +335,7 @@ function renderServo() {
     <p>伺服 ${esc(values.servo || '等待状态')} · 机器人 ${esc(robot)}</p></div>
     <div class="grid"><div class="panel"><h3>定位目标</h3>${pose(values.target)}</div><div class="panel"><h3>下一步法兰目标</h3>${pose(values.next_flange)}</div></div>`);
 }
+// 只刷新当前视图，并更新共用的备用命令区和按钮可用性。
 function render() {
   if (state && view === 'overview') renderOverview();
   $('overview').querySelector('[data-action="start-cameras"]').disabled = !state || busy || !!state.processes?.servo?.running;
@@ -327,6 +347,7 @@ function render() {
     '设置当前 ROS 域': `export ROS_DOMAIN_ID=${state.domain.match(/^\d+$/) ? state.domain : '99'}`}, 'shared') : '<p>等待后端连接。</p>');
 }
 let polling = false;
+// 同一时刻只发一次状态请求；若等待期间选择已变，丢弃旧响应避免覆盖新选择。
 async function refreshState() {
   if (polling) return;
   polling = true;
@@ -360,6 +381,7 @@ async function refreshState() {
     render();
   }
 }
+// 切换视图或断流时释放 blob URL、清空旧画面并显示原因，防止陈旧画面看似实时。
 function clearImage(box, reason) {
   const img = box.querySelector('img');
   if (urls.has(img)) {
@@ -372,6 +394,7 @@ function clearImage(box, reason) {
   placeholder.textContent = reason;
   placeholder.hidden = false;
 }
+// 按角色和 raw/overlay/servo 变体请求 JPEG；响应到来后再次核对视图，过期响应不显示。
 async function loadImage(box) {
   const {camera, variant} = box.dataset;
   try {
@@ -392,10 +415,12 @@ async function loadImage(box) {
     if (!box.closest('[hidden]') && box.dataset.camera === camera && box.dataset.variant === variant) clearImage(box, err.message);
   }
 }
+// 并行更新当前视图画面，本轮结束后等 250 ms 再请求；此频率不改变相机或伺服周期。
 async function imageLoop() {
   await Promise.all([...$(view).querySelectorAll('.viewport')].map(loadImage));
   setTimeout(imageLoop, 250);
 }
+// 切换页面，必要时重置向导，清理隐藏画面并加载对应列表。
 function show(next, role, purpose) {
   if (kinds.includes(next) && (view !== next || role || purpose)) {
     wizard = {role: role || 'eih', purpose: purpose || 'train', session: null, confirmed: new Set(), result: null,
@@ -415,6 +440,7 @@ function show(next, role, purpose) {
   if (next === 'diagnostics') void refreshLogs().catch(e => notice(e.message, 'bad'));
   render();
 }
+// 刷新会话列表，保留所选项或定位新会话，再加载明细。
 async function refreshSessions(focus) {
   const names = await api(path('sessions'));
   const list = $('session-list');
@@ -423,6 +449,7 @@ async function refreshSessions(focus) {
   if (names.includes(old)) list.value = old;
   await loadSession(list.value);
 }
+// 展示样本缩略图与人工重采标记；标记只记录原因，不自动删原始数据。
 async function loadSession(name) {
   gallery = name ? await api(path('session', {name})) : null;
   if (!gallery) {
@@ -437,6 +464,7 @@ async function loadSession(name) {
       ${s.resample ? `<p class="warn notice">${esc(s.resample)}</p>` : ''}
       <button data-action="mark" data-file="${esc(s.filename)}" data-marked="${!!s.resample}">${s.resample ? '取消标记' : '标记重采'}</button></div>`).join('')}</div>`);
 }
+// 刷新验证报告列表并尽量保留选择。
 async function refreshReports() {
   const names = await api(path('reports'));
   const list = $('report-list');
@@ -445,6 +473,7 @@ async function refreshReports() {
   if (names.includes(old)) list.value = old;
   await loadReport(list.value);
 }
+// 分别展示报告 passed 与脚本退出码；无退出文件时明确显示推断值。
 async function loadReport(name) {
   const report = name ? await api(path('report', {name})) : null;
   renderHTML('report-detail', report ?
@@ -453,10 +482,12 @@ async function loadReport(name) {
       ${report.data ? `<a href="${esc(path('report', {name, download: 1}))}" download="${esc(name.split('/').pop())}">下载 JSON</a>${pre(report.data)}` : '<p>脚本没有生成报告，请查看终端错误输出。</p>'}` :
     '<p>暂无报告。使用会话命令运行独立验证，或按操作手册运行定位精度脚本。</p>');
 }
+// 读取后端操作日志，所有字段经过转义后展示。
 async function refreshLogs() {
   const rows = await api(path('logs'));
   renderHTML('logs', rows.map(r => `<div class="check-row"><code>${esc(r.time)} · ${esc(r.event)}</code><div>${esc(r.message)}</div></div>`).join(''));
 }
+// 优先使用 Clipboard API，失败时用临时文本域回退，并报告复制失败。
 async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -471,6 +502,7 @@ async function copyText(text) {
   }
   notice('命令已复制');
 }
+// 统一分发动作；busy 防止重复提交，调速一次提交四项并等待成功后清除草稿标记。
 async function handleAction(button) {
   const action = button.dataset.action;
   const {role, purpose, session} = wizard;
@@ -547,6 +579,7 @@ async function handleAction(button) {
   else if (action === 'refresh-sessions') await refreshSessions();
   else if (action === 'refresh-reports') await refreshReports();
 }
+// 事件委托让动态生成的按钮也能处理点击，异常统一显示提示。
 document.addEventListener('click', async event => {
   const button = event.target.closest('button');
   if (!button) return;
@@ -558,6 +591,7 @@ document.addEventListener('click', async event => {
     notice(err.message, 'bad');
   }
 });
+// 处理标定文件/板规格选择、检查项和会话/报告选择变化。
 document.addEventListener('change', event => {
   const input = event.target;
   if (input.id === 'board-profile') wizard.boardProfile = input.value;
@@ -571,12 +605,14 @@ document.addEventListener('change', event => {
   if (input.id === 'session-list') void loadSession(input.value).catch(err => notice(err.message, 'bad'));
   if (input.id === 'report-list') void loadReport(input.value).catch(err => notice(err.message, 'bad'));
 });
+// 用户编辑运动参数时置草稿标志，使下一轮状态渲染保留当前输入。
 document.addEventListener('input', event => {
   if (['servo-speed', 'servo-linear', 'servo-angular', 'servo-accel'].includes(event.target.id)) {
     speedEdited = true;
     $('servo-speed-draft').textContent = `${$('servo-speed').value}%`;
   }
 });
+// 初始化向导、状态轮询和图像循环；状态每秒刷新，与图像更新分别调度。
 for (const kind of kinds) buildWizard(kind);
 void refreshState();
 void imageLoop();

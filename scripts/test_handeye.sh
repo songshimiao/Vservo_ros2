@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# 独立手眼验收：参数依次为新会话 samples.json、手眼矩阵、输出报告；不得复用训练会话。
 set -euo pipefail
 if [ "$#" -ne 3 ]; then
   echo "Usage: $0 independent_samples.json handeye.json report.json" >&2

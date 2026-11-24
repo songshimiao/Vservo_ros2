@@ -1,3 +1,5 @@
+# 机器人桥回归：使用临时生成的假 SDK 和合成手眼，所有 ServoJ 仅记录在内存中。
+# 包含线程/进程调度与时间保护测试，需要完整 ROS 环境；不应替换成实体 SDK 跑这些测试。
 """Exercise the ROS bridge against a fake RPC; zero physical motion."""
 import time
 import threading
@@ -20,6 +22,7 @@ from vservo_ros2.localizer_node import LocalizerNode
 from vservo_ros2.servo_node import ServoNode
 
 
+# 生成 RPC 替身文件和两路测试手眼矩阵，仿真关节反馈与 SDK 调用记录。
 @pytest.fixture
 def fake_sdk(tmp_path):
     sdk = tmp_path / 'Robot.py'
@@ -47,6 +50,7 @@ class RPC:
     return sdk, paths
 
 
+# 把 sdk_file 显式指向假 SDK，设置宽测试工作空间并初始化定位心跳。
 def make_node(fake_sdk, execute, auto_start=False, dedicated_control=False):
     sdk, paths = fake_sdk
     args = ['--ros-args', '-p', f'sdk_file:={sdk}', '-p', f'execute:={str(execute).lower()}',
@@ -61,6 +65,7 @@ def make_node(fake_sdk, execute, auto_start=False, dedicated_control=False):
     return node
 
 
+# 只读节点可反馈和计算命令，但不得使能 SDK 或发送位置。
 def test_readonly_never_starts_or_sends_motion(fake_sdk):
     node = make_node(fake_sdk, False)
     try:
@@ -82,6 +87,7 @@ def test_readonly_never_starts_or_sends_motion(fake_sdk):
         rclpy.shutdown()
 
 
+# 晚加入 TF 监听者仍收到 EIH/ETH 两条手眼静态变换。
 def test_late_tf_listener_receives_both_handeye_transforms(fake_sdk):
     robot = make_node(fake_sdk, False)
     probe = Node('late_handeye_listener')
@@ -108,6 +114,7 @@ def test_late_tf_listener_receives_both_handeye_transforms(fake_sdk):
         rclpy.shutdown()
 
 
+# 任意一路单独看到目标都能经定位/伺服链路开始假 SDK 会话。
 @pytest.mark.parametrize('role', ['eih', 'eth'])
 def test_either_camera_alone_can_start_sdk_servo(fake_sdk, role):
     robot = make_node(fake_sdk, True)
@@ -149,6 +156,7 @@ def test_either_camera_alone_can_start_sdk_servo(fake_sdk, role):
         rclpy.shutdown()
 
 
+# 指令过期时等待并保持会话，不因暂缺目标撤销持续意图。
 def test_follow_waits_on_stale_command_without_exiting_session(fake_sdk):
     node = make_node(fake_sdk, True)
     try:
@@ -172,6 +180,7 @@ def test_follow_waits_on_stale_command_without_exiting_session(fake_sdk):
         rclpy.shutdown()
 
 
+# 动态倍率的范围/类型检查与关节推进缩放。
 def test_speed_parameter_rejects_invalid_values_and_scales_motion(fake_sdk):
     node = make_node(fake_sdk, True)
     try:
@@ -194,6 +203,7 @@ def test_speed_parameter_rejects_invalid_values_and_scales_motion(fake_sdk):
         rclpy.shutdown()
 
 
+# 经真实 ROS 参数服务调速，确认桥接反馈是实际生效值。
 def test_web_ros_speed_service_confirms_applied_value(fake_sdk):
     robot = make_node(fake_sdk, False)
     link = RosLink(1)
@@ -235,6 +245,7 @@ def test_web_ros_speed_service_confirms_applied_value(fake_sdk):
         rclpy.shutdown()
 
 
+# 从 SDK 指令位置差分比较新完整目标与旧微步速度，验证运行中调参确实改变轨迹。
 def test_full_target_drives_faster_and_runtime_controls_change_actual_motion(fake_sdk):
     """Compare generated SDK positions, rather than just parameter feedback."""
     node = make_node(fake_sdk, True, auto_start=True)
@@ -288,6 +299,7 @@ def test_full_target_drives_faster_and_runtime_controls_change_actual_motion(fak
         rclpy.shutdown()
 
 
+# 双路丢失后只复位一次，目标恢复后自动跟随，无需重新 SDK 使能。
 def test_auto_follow_returns_home_once_and_resumes_without_manual_rearm(fake_sdk):
     node = make_node(fake_sdk, True, auto_start=True)
     try:
@@ -324,6 +336,7 @@ def test_auto_follow_returns_home_once_and_resumes_without_manual_rearm(fake_sdk
         rclpy.shutdown()
 
 
+# 运行中改变角速度、加速度及倍率，检查生成位置序列而不只看参数状态。
 def test_live_angular_acceleration_and_override_change_sdk_trajectory(fake_sdk):
     node = make_node(fake_sdk, True, auto_start=True)
     try:
@@ -370,6 +383,7 @@ def test_live_angular_acceleration_and_override_change_sdk_trajectory(fake_sdk):
         rclpy.shutdown()
 
 
+# 控制器返回错误后进入故障并撤销持续请求，不能不断重试运动。
 def test_controller_error_stops_session_instead_of_retrying_motion(fake_sdk):
     node = make_node(fake_sdk, True, auto_start=True)
     try:
@@ -382,6 +396,7 @@ def test_controller_error_stops_session_instead_of_retrying_motion(fake_sdk):
         rclpy.shutdown()
 
 
+# 子进程入口，按生产边界分别运行 localizer/servo，避免把测试节点强塞在同一解释器。
 def run_pipeline_component(kind, handeye, ready, stopped):
     rclpy.init(args=['--ros-args', '-p', f'eih_handeye:={handeye}',
                     '-p', 'workspace_min:=[-2.0,-2.0,-2.0]', '-p', 'workspace_max:=[2.0,2.0,2.0]'])
@@ -395,6 +410,7 @@ def run_pipeline_component(kind, handeye, ready, stopped):
         rclpy.shutdown()
 
 
+# 真实进程边界下验证首次主导、单路遮挡双向接管、双路丢失才复位和人工停止。
 @pytest.mark.parametrize('first', ['eih', 'eth'])
 def test_timed_ros_pipeline_tracks_either_camera_hands_off_and_only_homes_on_both_loss(fake_sdk, first):
     import multiprocessing
@@ -405,12 +421,14 @@ def test_timed_ros_pipeline_tracks_either_camera_hands_off_and_only_homes_on_bot
                   for role in ('eih', 'eth')}
     visibility = {role: fixture.create_publisher(String, f'/{role}/target_visibility', 1)
                   for role in ('eih', 'eth')}
+    # 清除一路有效发布并发送带时间戳丢失事件，模拟遮挡。
     def lose_role(role):
         visibility[role].publish(String(data=json.dumps(dict(
             frame_id=f'{role}_optical_frame', visible=False,
             stamp_ns=fixture.get_clock().now().nanoseconds, reason='Occluded in test'))))
     second = 'eth' if first == 'eih' else 'eih'
     board = robot.model.fk(robot.home+np.array([0.04, 0, 0, 0, 0, 0])) @ transform(t=[0, 0, 0.30])
+    # 周期发布指定角色的合成观测，保持消息时间戳与测试 TF 一致。
     def publish_roles(roles):
         current = robot.model.fk(robot.q)
         for role in roles:
@@ -433,6 +451,7 @@ def test_timed_ros_pipeline_tracks_either_camera_hands_off_and_only_homes_on_bot
         children.append(child)
         ready_events.append(ready)
     solve = robot.solve_ik
+    # 人为延长规划计算，确认独立 SDK 控制不随 IK 同步阻塞。
     def slow_ik(target, seed):
         time.sleep(0.06)
         return solve(target, seed)
@@ -519,6 +538,7 @@ def test_timed_ros_pipeline_tracks_either_camera_hands_off_and_only_homes_on_bot
         rclpy.shutdown()
 
 
+# WAITING_TF 应等待定位并重置双路丢失计时，不能误启动复位。
 def test_waiting_for_visible_target_tf_never_starts_home_and_resets_loss_timer(fake_sdk):
     robot = make_node(fake_sdk, True, auto_start=True)
     try:
@@ -539,6 +559,7 @@ def test_waiting_for_visible_target_tf_never_starts_home_and_resets_loss_timer(f
         rclpy.shutdown()
 
 
+# 完整目标仍须合法；相机切换提高 epoch，旧 IK 结果不得提交。
 def test_full_target_rejects_invalid_pose_and_discards_ik_across_camera_switch(fake_sdk):
     node = make_node(fake_sdk, False)
     try:
@@ -555,6 +576,7 @@ def test_full_target_rejects_invalid_pose_and_discards_ik_across_camera_switch(f
         node.on_command(msg)
         assert node.command is None  # Legacy stream cannot replace a failed full target.
         solve = node.model.ik
+        # 在 IK 计算过程中切换定位状态，构造异步旧结果竞争。
         def switch_camera(target, seed):
             goal = solve(target, seed)
             node.on_localization(String(data='FINE'))
@@ -568,6 +590,7 @@ def test_full_target_rejects_invalid_pose_and_discards_ik_across_camera_switch(f
         rclpy.shutdown()
 
 
+# SDK 使能慢时，独立回调组仍必须持续收到定位心跳。
 def test_heartbeat_is_received_during_slow_sdk_enable(fake_sdk):
     robot = make_node(fake_sdk, True)
     robot.rpc.positions = np.rad2deg(robot.home).tolist()
@@ -577,6 +600,7 @@ def test_heartbeat_is_received_during_slow_sdk_enable(fake_sdk):
     finished = threading.Event()
     received_during_enable = []
     enable = robot.rpc.ServoMoveStart
+    # 注入慢使能，放大原互斥回调组造成的心跳饿死问题。
     def slow_enable():
         before = robot.localization_received
         time.sleep(0.65)
@@ -610,6 +634,7 @@ def test_heartbeat_is_received_during_slow_sdk_enable(fake_sdk):
         rclpy.shutdown()
 
 
+# 真正超过心跳时限时，运行中或使能返回后都不能继续发位置。
 @pytest.mark.parametrize('during_enable', [False, True])
 def test_real_heartbeat_loss_still_faults_before_more_position_commands(fake_sdk, during_enable):
     robot = make_node(fake_sdk, True, auto_start=True)
@@ -618,6 +643,7 @@ def test_real_heartbeat_loss_still_faults_before_more_position_commands(fake_sdk
         robot.command = (robot.get_clock().now().to_msg(), time.monotonic(), robot.q.copy())
         if during_enable:
             enable = robot.rpc.ServoMoveStart
+            # 使能期间模拟心跳老化，检查发送前重新验证是否生效。
             def lose_heartbeat():
                 robot.localization_received = time.monotonic()-0.6
                 return enable()
@@ -639,6 +665,7 @@ def test_real_heartbeat_loss_still_faults_before_more_position_commands(fake_sdk
         rclpy.shutdown()
 
 
+# 验证 YAML 与 launch 合并优先级，显式速度覆盖实际到达 ROS 参数。
 @pytest.mark.parametrize('overrides', [{}, dict(linear_speed_m_s=0.003, angular_speed_rad_s=0.1,
                                               max_joint_accel_rad_s2=0.8)])
 def test_launch_motion_profile_reaches_ros_parameter_values(fake_sdk, tmp_path, overrides):
@@ -665,6 +692,7 @@ def test_launch_motion_profile_reaches_ros_parameter_values(fake_sdk, tmp_path, 
         rclpy.shutdown()
 
 
+# 人为阻塞 ROS 回调时，专用控制线程仍连续发送假 ServoJ。
 def test_dedicated_control_keeps_sending_during_blocked_ros_executor(fake_sdk):
     robot = make_node(fake_sdk, True, auto_start=True, dedicated_control=True)
     robot.rpc.positions = np.rad2deg(robot.home).tolist()
@@ -672,12 +700,14 @@ def test_dedicated_control_keeps_sending_during_blocked_ros_executor(fake_sdk):
     publisher = fixture.create_publisher(String, '/localization/state', 1)
     fixture.create_timer(0.05, lambda: publisher.publish(String(data='HOLD')))
     blocked_while_armed = []
+    # 注入 80 ms ROS 回调阻塞，测试 executor 与控制线程解耦。
     def block_callback():
         blocked_while_armed.append(robot.armed)
         time.sleep(0.08)
     fixture.create_timer(0.25, block_callback)
     sent = []
     send = robot.rpc.ServoJ
+    # 记录每次假 SDK 发送时刻，用实际间隔断言控制连续性。
     def record_send(*args, **kwargs):
         sent.append(time.monotonic())
         return send(*args, **kwargs)
@@ -707,12 +737,14 @@ def test_dedicated_control_keeps_sending_during_blocked_ros_executor(fake_sdk):
         rclpy.shutdown()
 
 
+# 单次 ServoJ 真正过慢时应故障，记录含调用耗时的诊断。
 def test_slow_servoj_still_trips_watchdog_with_latency_details(fake_sdk):
     robot = make_node(fake_sdk, True, auto_start=True)
     try:
         robot.tick()
         robot.command = (robot.get_clock().now().to_msg(), time.monotonic(), robot.q.copy())
         send = robot.rpc.ServoJ
+        # 在假 SDK 中延长同步发送时间，模拟通信停顿。
         def slow_send(*args, **kwargs):
             time.sleep(0.07)
             return send(*args, **kwargs)
@@ -732,6 +764,7 @@ def test_slow_servoj_still_trips_watchdog_with_latency_details(fake_sdk):
         rclpy.shutdown()
 
 
+# 仅回调起始间隔偏大不能误停；保护依据成功发送后的实际间隔。
 @pytest.mark.parametrize('command_missing', [False, True])
 def test_watchdog_checks_command_gap_instead_of_callback_start_interval(fake_sdk, command_missing):
     robot = make_node(fake_sdk, True, auto_start=True)
@@ -758,11 +791,14 @@ def test_watchdog_checks_command_gap_instead_of_callback_start_interval(fake_sdk
         rclpy.shutdown()
 
 
+# IK 超时后 worker 仍忙时不能不断追加旧任务。
 def test_ik_worker_timeout_does_not_queue_repeated_stale_jobs(fake_sdk):
     from concurrent.futures import Future
     robot = make_node(fake_sdk, False)
+    # 不立即完成 Future 的规划池替身，用于检查排队数量。
     class BusyPool:
         calls = 0
+        # 记录任务提交并返回未完成 Future，模拟繁忙计算进程。
         def submit(self, *args):
             self.calls += 1
             future = Future()
@@ -782,15 +818,18 @@ def test_ik_worker_timeout_does_not_queue_repeated_stale_jobs(fake_sdk):
         rclpy.shutdown()
 
 
+# 慢复位预检查在后台执行，控制线程保持发送，验证后完成复位。
 def test_slow_reset_preflight_keeps_armed_servo_stream_and_completes_home(fake_sdk):
     robot = make_node(fake_sdk, True, auto_start=True)
     sent, planning_counts = [], []
     robot.rpc.positions = np.rad2deg(robot.home+0.02).tolist()
     send = robot.rpc.ServoJ
+    # 给假 ServoJ 加接近现场的调用时延，防止零耗时 SDK 掩盖阻塞问题。
     def realistic_send(*args, **kwargs):
         time.sleep(0.009)
         sent.append(time.monotonic())
         return send(*args, **kwargs)
+    # 人为延长路径预检查，确认不占住 100 Hz 控制线程。
     def slow_check(*args):
         before = len(sent)
         time.sleep(0.08)
@@ -825,6 +864,7 @@ def test_slow_reset_preflight_keeps_armed_servo_stream_and_completes_home(fake_s
         rclpy.shutdown()
 
 
+# 非法复位路径必须在使能/运动之前拒绝。
 def test_invalid_reset_path_is_rejected_before_enabling_motion(fake_sdk):
     robot = make_node(fake_sdk, True, auto_start=True)
     try:
@@ -844,6 +884,7 @@ def test_invalid_reset_path_is_rejected_before_enabling_motion(fake_sdk):
         rclpy.shutdown()
 
 
+# 尚未开始执行的复位结果在人工停止或重新捕获后失效，不能延迟触发旧运动。
 @pytest.mark.parametrize('manual_stop', [False, True])
 def test_pending_reset_plan_is_discarded_after_stop_or_reacquisition(fake_sdk, manual_stop):
     from concurrent.futures import Future

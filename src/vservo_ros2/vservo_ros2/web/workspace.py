@@ -1,3 +1,5 @@
+# Web 文件层：限定路径、查找标定候选、固定会话板规格、绑定独立验证报告、生成备用命令。
+# 训练结果与独立验收分开保存；验证通过标记绑定标定文件的 SHA-256，文件改变后不能沿用旧结论。
 """Filesystem views and shell-safe commands for the operator console."""
 from datetime import datetime
 import hashlib
@@ -18,9 +20,11 @@ FILES = {'intrinsic': 'intrinsics', 'handeye': 'handeye'}
 BOARD_PROFILES = {'legacy': 'board.yaml', 'compact': 'board_compact.yaml', 'a4': 'board_a4.yaml'}
 
 
+# 最多读取 8 MiB 的 JSON 字典，并拒绝 NaN/Infinity 等非标准数值。
 def read_object(path):
     if path.stat().st_size > 8 * 1024 * 1024:
         raise ValueError('JSON 超过 8 MiB')
+    # 作为 JSON 回调，遇到非法数值立即抛错。
     def reject_constant(token):
         raise ValueError(f'JSON 包含无效数值 {token}')
     value = json.loads(path.read_text(), parse_constant=reject_constant)
@@ -29,6 +33,7 @@ def read_object(path):
     return value
 
 
+# 先判断文件内容有效性，再核对在线相机身份/尺寸；compatible=None 表示尚无在线证据。
 def assess(path, role, kind, camera):
     """Separate validated file contents from compatibility with a live camera."""
     result = dict(exists=path.is_file(), valid=False, compatible=None)
@@ -69,17 +74,21 @@ def assess(path, role, kind, camera):
     return result
 
 
+# 把 ROS Trigger/SetBool 的 success/message 转成 HTTP 可序列化字典。
 def service_result(response):
     return dict(success=bool(response.success), message=response.message)
 
 
+# 统一约束 data、sessions、reports 路径和会话文件格式。
 class Workspace:
+    # 解析工程根目录并派生现场数据目录，不在构造时生成采样数据。
     def __init__(self, root):
         self.root = Path(root).expanduser().resolve()
         self.data = self.root / 'data'
         self.sessions = self.data / 'sessions'
         self.reports = self.data / 'reports'
 
+    # 解析真实路径后限制在给定根目录内，拒绝绝对路径、根本身和经符号链接越界。
     def bounded(self, root, relative):
         relative = Path(relative)
         target = (root / relative).resolve()
@@ -87,11 +96,13 @@ class Workspace:
             raise ValueError('路径超出工作区')
         return target
 
+    # 会话名只允许单个非隐藏目录名，再做路径边界校验。
     def session_dir(self, session):
         if not isinstance(session, str) or Path(session).name != session or session.startswith('.'):
             raise ValueError('会话名称无效')
         return self.bounded(self.sessions, session)
 
+    # 先给标准标定路径，再列出近期同角色/同类型训练会话中的结果。
     def candidate_paths(self, role, kind):
         name = f'{role}_{FILES[kind]}.json'
         yield self.data / 'calibration' / name
@@ -101,6 +112,7 @@ class Workspace:
                 if candidate.is_file() and candidate.resolve().is_relative_to(self.sessions.resolve()):
                     yield candidate
 
+    # 无显式选择则用首个候选；显式路径必须确实属于该角色与标定类型。
     def select(self, role, kind, relative=''):
         paths = list(self.candidate_paths(role, kind))
         if not relative:
@@ -110,9 +122,11 @@ class Workspace:
             raise ValueError('标定文件不属于所选相机和类型')
         return path
 
+    # 把预定义板规格名称映射到工程 config 中的固定文件。
     def board_config(self, profile):
         return self.root/'src/vservo_ros2/config'/BOARD_PROFILES[profile]
 
+    # 创建唯一会话及固定板规格副本；独立验证同时锁定来源标定路径和内容哈希。
     def new_session(self, role, kind, purpose, selected='', board_profile=None):
         if role not in ROLES or kind not in KINDS or purpose not in ('train', 'check'):
             raise ValueError('相机、标定类型或会话用途无效')
@@ -142,6 +156,7 @@ class Workspace:
         write_json(directory/'web_session.json', plan, replace=False)
         return self.session(name)
 
+    # 读取会话计划并检查名字、角色、类型、用途，供所有后续动作共同使用。
     def plan(self, name):
         directory = self.session_dir(name)
         plan = read_object(self.bounded(directory, 'web_session.json'))
@@ -150,9 +165,11 @@ class Workspace:
             raise ValueError('会话计划无效')
         return plan
 
+    # 根据角色/类型生成本会话的结果文件名；原标准标定文件不会在此直接覆盖。
     def output(self, plan):
         return self.session_dir(plan['name']) / f"{plan['role']}_{FILES[plan['kind']]}.json"
 
+    # 只有独立样本≥5、报告比样本新、真实退出码为 0、passed=True 且哈希匹配才认可。
     def verification(self, role, kind, selected):
         """Count only passed Web verification sessions bound to these exact calibration bytes."""
         if not selected.is_file() or not self.sessions.is_dir():
@@ -177,6 +194,7 @@ class Workspace:
                 continue
         return None
 
+    # 组合计划、样本清单、重采标记、板规格与备用命令，供会话页面显示。
     def session(self, name):
         directory = self.session_dir(name)
         manifest, plan = {}, None
@@ -198,6 +216,7 @@ class Workspace:
         return dict(name=name, plan=plan, role=manifest.get('role'), mode=manifest.get('mode'), board=board,
                     samples=samples, commands=self.session_commands(plan) if plan else {})
 
+    # 构造采集节点 argv，开启结果防覆盖；续采显式传 resume，并使用会话固定板规格。
     def calibration_launch(self, plan, resume=False):
         role, kind = plan['role'], plan['kind']
         directory = self.session_dir(plan['name'])
@@ -212,6 +231,7 @@ class Workspace:
             args.append(f'board_config:={self.board_config("a4")}')
         return args
 
+    # 验证来源文件仍与会话哈希一致，再返回独立验证脚本 argv 和报告路径。
     def verification_run(self, plan):
         if plan['purpose'] != 'check':
             raise ValueError('请使用独立验证会话')
@@ -224,6 +244,7 @@ class Workspace:
         return ['bash', str(self.root/'scripts'/script), str(self.session_dir(plan['name'])/'samples.json'),
                 str(source), str(report)], report
 
+    # 生成可复制命令；验证命令额外记录真实退出码，区别无报告错误和验收不通过。
     def session_commands(self, plan):
         role = plan['role']
         commands = {'启动采集节点（终端备用）': shlex.join(self.calibration_launch(plan, resume=True)),
@@ -242,6 +263,7 @@ class Workspace:
                 f"rc=$?; printf '%s\\n' \"$rc\" > {shlex.quote(str(report.with_suffix('.exit')))}; exit \"$rc\")")
         return commands
 
+    # 保存/取消人工重采原因，仅作标记；不从原 samples.json 中自动删样本。
     def mark(self, name, filename, reason):
         directory = self.session_dir(name)
         if filename not in {s['filename'] for s in self.session(name)['samples']}:
@@ -254,6 +276,7 @@ class Workspace:
             markers.pop(filename, None)
         write_json(path, markers)
 
+    # 把固定 argv 经 shlex 转为可复制的终端命令，包含环境准备和只读入口。
     def commands(self, selected, cameras):
         prefix = f"cd {shlex.quote(str(self.root))}\nsource /opt/ros/humble/setup.bash\nsource install/setup.bash"
         raw, live, servo, bridge = self.launch_commands(selected, cameras)
@@ -262,6 +285,7 @@ class Workspace:
                 '启动只读机器人桥（终端 B）': shlex.join(bridge),
                 '启动完整只读伺服（先停止独立相机及桥接）': shlex.join(servo)}
 
+    # 按在线设备或标定结果补足序列号/分辨率/路径，生成原图、加载内参、伺服与只读桥接入口。
     def launch_commands(self, selected, cameras):
         raw = ['ros2', 'launch', 'vservo_ros2', 'dual_camera.launch.py']
         live = raw.copy()

@@ -1,3 +1,4 @@
+# 坐标轴显示回归：验证颜色、方向、原图不变、精确时间匹配以及真实 ROS 检测到 JPEG 链路。
 """ID42 overlays use validated, timestamp-matched detections; no robot SDK."""
 import json
 import time
@@ -19,6 +20,7 @@ from vservo_ros2.web.ros_link import RosLink
 from vservo_ros2.web.target_overlay import draw_target_axes, matched_target_frame
 
 
+# 构造同一 optical_frame、同一时间的图像、内参和目标位姿。
 def preview_messages():
     image = np.full((480, 640, 3), 255, np.uint8)
     frame = CvBridge().cv2_to_imgmsg(image, 'bgr8')
@@ -32,6 +34,7 @@ def preview_messages():
     return image, frame, info, pose
 
 
+# 画在副本上，确认 RGB 轴颜色与正 Z 投影位置，原始白图保持不变。
 def test_draw_axes_preserves_raw_frame_and_uses_into_marker_positive_z():
     raw, _, info, pose = preview_messages()
     drawn = draw_target_axes(raw, pose, info)
@@ -47,6 +50,7 @@ def test_draw_axes_preserves_raw_frame_and_uses_into_marker_positive_z():
     assert np.any((patch[:, :, 0] > 150) & (patch[:, :, 1] < 100) & (patch[:, :, 2] < 100))
 
 
+# 分别注入超时、丢失、错 ID/坐标系/时间/尺寸，只有完全匹配时允许绘轴。
 @pytest.mark.parametrize('condition', ['valid', 'stale', 'lost', 'other_id', 'wrong_frame', 'other_stamp', 'other_size'])
 def test_axes_require_fresh_id42_and_exact_source_frame(condition):
     _, frame, info, pose = preview_messages()
@@ -64,6 +68,7 @@ def test_axes_require_fresh_id42_and_exact_source_frame(condition):
     assert (result is not None) == (condition == 'valid')
 
 
+# 发布合成 ID42 经 DetectorNode→RosLink 编码，目标消失后应清除彩轴并退回原图。
 @pytest.mark.parametrize('role', ['eih', 'eth'])
 def test_real_detector_to_web_overlay_and_loss_clear_axes(role):
     rclpy.init(args=['--ros-args', '-p', f'role:={role}', '-p', 'target_id:=aruco_42'])
@@ -88,6 +93,7 @@ def test_real_detector_to_web_overlay_and_loss_clear_axes(role):
     image = cv2.warpPerspective(bitmap, cv2.getPerspectiveTransform(corners, pixels),
                                 (640, 480), borderValue=255)
     bridge = CvBridge()
+    # 统计有明显通道差的彩色像素，用来区别黑白标记原图与坐标轴叠图。
     def colored(bgr):
         return np.count_nonzero(np.max(bgr, axis=2).astype(int)-np.min(bgr, axis=2).astype(int) > 60)
     try:

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 现场只读机械臂测试：启动 execute=false 的桥接并读取反馈，不调用 arm 或 ServoJ。
 """Live FR5 state smoke check. execute=false; no arm/ServoJ calls."""
 import os
 import signal
@@ -11,6 +12,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
 
+# 启动自有 ROS 子进程并订阅反馈，达到条件后检查结果；finally 只停止本脚本创建的进程组。
 def main():
     rclpy.init()
     node = Node('robot_readonly_smoke')

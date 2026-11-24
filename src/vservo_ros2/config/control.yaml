@@ -1,15 +1,21 @@
+# 通用参数；后续 /localizer、/servo、/robot_bridge 是节点专属参数块。
 /**:
   ros__parameters:
     # Example bounds; measure and edit for the actual base frame before use.
+    # 基座系法兰位置的包围盒（米），只检查位置，不代表实体连杆碰撞检查。
     workspace_min: [-0.6, -0.6, 0.1]
     workspace_max: [0.6, 0.6, 0.8]
+    # 视觉观测有效期（秒）；未来时间戳和超过此年龄的数据都不能继续驱动。
     max_age_s: 0.3
 /localizer:
   ros__parameters:
+    # 先看到目标的一路主导，失效才交接；两路同时可见时不来回抢占。
     selection_policy: first_seen
+    # 两路图像时间差小于此值才计算一致性；位置门槛为米、姿态门槛为度。
     pair_skew_s: 0.10
     agreement_m: 0.04
     agreement_deg: 12.0
+    # 以下距离滞回与确认超时主要用于历史 handoff 策略；first_seen 不按距离抢占。
     fine_enter_m: 0.45
     fine_leave_m: 0.55
     # Use an ETH observation only within max_age_s. This longer window permits
@@ -21,15 +27,21 @@
     reacquire_delay_s: 0.5
 /servo:
   ros__parameters:
+    # 先看到目标的一路主导，失效才交接；两路同时可见时不来回抢占。
     selection_policy: first_seen
+    # 距离约束作用于法兰中心；camera 模式则补偿 EIH 手眼后约束相机中心。
     tracking_frame: flange
+    # 距离单位为米；非 handoff 策略两种来源都使用下方 fine_distance_m，以实际配置值为准。
     coarse_distance_m: 0.30
     fine_distance_m: 0.25
 /robot_bridge:
   ros__parameters:
+    # 关节速度 rad/s、加速度 rad/s²；线速度 m/s、角速度 rad/s，均受桥接运行时限制。
     max_joint_speed_rad_s: 2.0
     max_joint_accel_rad_s2: 0.5
     linear_speed_m_s: 0.10
     angular_speed_rad_s: 0.5235987755982988
+    # 复位六轴角度以度配置，桥接内部换为弧度；复位也遵守动态速度和加速度设置。
     home_joint_deg: [90.0, -110.0, 110.0, -180.0, -90.0, 0.0]
+    # 仅定位 HOLD 持续达到此延时才准备复位；WAITING_TF 不计作双路丢失。
     target_loss_home_delay_s: 0.5
