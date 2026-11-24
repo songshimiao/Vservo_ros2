@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="1000" height="600" role="img" aria-labelledby="title desc">
+  <title id="title">EIH、ETH 与 FR5 共平台安装俯视图</title>
+  <desc id="desc">平台沿世界正 Y 平移，世界正 Z 朝观察者，两台相机光轴和法兰正 Z 均指向世界正 X。两台相机在平台右方形成共同视野。</desc>
+  <defs>
+    <marker id="world" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#30435a"/></marker>
+    <marker id="eih" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#1764a3"/></marker>
+    <marker id="eth" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#08775f"/></marker>
+  </defs>
+  <rect width="1000" height="600" fill="#f4f7fa"/>
+  <g font-family="Noto Sans CJK SC, sans-serif" fill="#192c40">
+    <text x="48" y="56" font-size="30" font-weight="700">FR5 双相机共平台安装</text>
+    <text x="50" y="89" font-size="17" fill="#43596d">从世界 +Z 侧俯视 · 位置与视场角为示意</text>
+    <rect x="162" y="135" width="370" height="341" rx="18" fill="#e4ebf2" stroke="#8fa4b8" stroke-width="2"/>
+    <text x="184" y="166" font-size="17" font-weight="700">共用移动平台</text>
+    <path d="M 126 432 V 184" fill="none" stroke="#30435a" stroke-width="4" marker-end="url(#world)"/>
+    <text x="102" y="310" font-size="17" text-anchor="middle" transform="rotate(-90 102 310)">平台移动 · 世界 +Y</text>
+
+    <path d="M 510 205 L 938 121 L 938 289 Z" fill="#1764a3" fill-opacity=".13" stroke="#1764a3" stroke-opacity=".43" stroke-width="2"/>
+    <path d="M 510 363 L 938 205 L 938 521 Z" fill="#08775f" fill-opacity=".13" stroke="#08775f" stroke-opacity=".43" stroke-width="2"/>
+    <path d="M 789.4 259.8 L 938 205 L 938 289 Z" fill="#466c8d" fill-opacity=".26" stroke="#466c8d" stroke-dasharray="4 5"/>
+    <text x="885" y="252" font-size="17" font-weight="700" text-anchor="middle">共同视野</text>
+    <circle cx="879" cy="270" r="6" fill="#192c40"/>
+
+    <circle cx="253" cy="306" r="47" fill="#8496aa" stroke="#4e6379" stroke-width="2"/>
+    <path d="M 253 306 L 363 275 L 455 274" fill="none" stroke="#52677d" stroke-width="33" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="253" cy="306" r="22" fill="#dce6ee" stroke="#52677d" stroke-width="4"/>
+    <circle cx="363" cy="275" r="16" fill="#dce6ee" stroke="#52677d" stroke-width="4"/>
+    <rect x="451" y="247" width="30" height="54" rx="6" fill="#355069"/>
+    <text x="211" y="374" font-size="17">FR5 基座</text>
+    <path d="M 424 225 L 454 248" fill="none" stroke="#52677d" stroke-width="7"/>
+    <text x="372" y="313" font-size="15">末端法兰</text>
+    <path d="M 485 275 H 663" fill="none" stroke="#30435a" stroke-width="3" marker-end="url(#world)"/>
+    <text x="550" y="298" font-size="16">+Z 法兰</text>
+
+    <rect x="407" y="188" width="103" height="34" rx="7" fill="#1764a3"/>
+    <text x="419" y="211" fill="white" font-size="16" font-weight="700">EIH · 305</text>
+    <path d="M 510 205 H 664" fill="none" stroke="#1764a3" stroke-width="3" marker-end="url(#eih)"/>
+    <text x="549" y="193" font-size="16" fill="#1764a3">+Z EIH</text>
+
+    <rect x="436" y="379" width="51" height="21" rx="4" fill="#82a69c"/>
+    <rect x="407" y="346" width="103" height="34" rx="7" fill="#08775f"/>
+    <text x="417" y="369" fill="white" font-size="16" font-weight="700">ETH · 335</text>
+    <text x="413" y="428" font-size="16">固定支架</text>
+    <path d="M 510 363 H 664" fill="none" stroke="#08775f" stroke-width="3" marker-end="url(#eth)"/>
+    <text x="548" y="388" font-size="16" fill="#08775f">+Z ETH</text>
+
+    <path d="M 715 478 V 411" fill="none" stroke="#30435a" stroke-width="2.5" marker-end="url(#world)"/>
+    <path d="M 715 478 H 797" fill="none" stroke="#30435a" stroke-width="2.5" marker-end="url(#world)"/>
+    <circle cx="715" cy="478" r="10" fill="#f4f7fa" stroke="#30435a" stroke-width="2"/><circle cx="715" cy="478" r="3" fill="#30435a"/>
+    <text x="800" y="483" font-size="15">世界 +X</text>
+    <text x="704" y="402" font-size="15" text-anchor="end">世界 +Y</text>
+    <text x="699" y="505" font-size="15" text-anchor="end">世界 +Z 出纸面</text>
+    <path d="M 48 530 H 952" stroke="#c2cdd8"/>
+    <text x="48" y="559" font-size="17">EIH 随法兰运动，ETH 刚性安装于平台。两路定位在随平台移动的机器人基座坐标系内比较。</text>
+  </g>
+</svg>

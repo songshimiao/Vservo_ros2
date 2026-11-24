@@ -1,0 +1,35 @@
+/**:
+  ros__parameters:
+    # Example bounds; measure and edit for the actual base frame before use.
+    workspace_min: [-0.6, -0.6, 0.1]
+    workspace_max: [0.6, 0.6, 0.8]
+    max_age_s: 0.3
+/localizer:
+  ros__parameters:
+    selection_policy: first_seen
+    pair_skew_s: 0.10
+    agreement_m: 0.04
+    agreement_deg: 12.0
+    fine_enter_m: 0.45
+    fine_leave_m: 0.55
+    # Use an ETH observation only within max_age_s. This longer window permits
+    # handoff to new EIH observations after ETH has left view.
+    handoff_timeout_s: 1.0
+    # Pair differences remain observable while the active camera keeps ownership.
+    require_pair_agreement: false
+    target_loss_timeout_s: 2.0
+    reacquire_delay_s: 0.5
+/servo:
+  ros__parameters:
+    selection_policy: first_seen
+    tracking_frame: flange
+    coarse_distance_m: 0.30
+    fine_distance_m: 0.25
+/robot_bridge:
+  ros__parameters:
+    max_joint_speed_rad_s: 2.0
+    max_joint_accel_rad_s2: 0.5
+    linear_speed_m_s: 0.10
+    angular_speed_rad_s: 0.5235987755982988
+    home_joint_deg: [90.0, -110.0, 110.0, -180.0, -90.0, 0.0]
+    target_loss_home_delay_s: 0.5

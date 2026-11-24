@@ -1,0 +1,14 @@
+build/
+install/
+log/
+Log/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/**
+!data/.gitkeep
+AGENTS.md
+Handoff.md
+.vscode
+
+

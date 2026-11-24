@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    squares_x: 7
+    squares_y: 5
+    square_m: 0.015
+    marker_m: 0.011
+    dictionary: DICT_4X4_50
