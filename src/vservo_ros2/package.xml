@@ -1,18 +1,28 @@
 <?xml version="1.0"?>
 <!-- ROS 包清单：依赖声明供 rosdep/构建工具使用；Python 命令入口在 setup.py 中定义。 -->
 <package format="3">
-  <name>vservo_ros2</name><version>0.1.0</version>
+  <name>vservo_ros2</name>
+  <version>0.1.0</version>
   <description>FR5 dual-camera calibration, localization and guarded PBVS.</description>
   <maintainer email="robotics@example.invalid">Jetson Robotics</maintainer>
   <license>Proprietary</license>
+  
   <!-- 使用 ament_python 打包；运行时依赖包括消息、服务、TF、图像桥和数值计算。 -->
   <buildtool_depend>ament_python</buildtool_depend>
-  <exec_depend>rclpy</exec_depend><exec_depend>rcl_interfaces</exec_depend><exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend><exec_depend>std_msgs</exec_depend>
-  <exec_depend>std_srvs</exec_depend><exec_depend>cv_bridge</exec_depend>
-  <exec_depend>tf2_ros</exec_depend><exec_depend>launch_ros</exec_depend>
-  <exec_depend>ament_index_python</exec_depend><exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-scipy</exec_depend><exec_depend>python3-yaml</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  
   <!-- 回归测试由 pytest 驱动；测试不会替代现场运动验收。 -->
   <test_depend>python3-pytest</test_depend>
   <export><build_type>ament_python</build_type></export>
